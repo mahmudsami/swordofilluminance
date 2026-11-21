@@ -33,14 +33,17 @@ Telefon olmadan denemek için lobide boş oyuncu yerindeki **⌨ Klavye** düğm
 
 - **Doğrudan bağlantı (⚡):** Telefon, TV ile aynı ağdaysa girdiler sunucuya uğramadan WebRTC veri kanalıyla doğrudan TV'ye gider. Sunucu internette (uzakta) olsa bile tuş gecikmesi yerel ağ hızındadır.
 - **Sunucu üzerinden (☁):** Doğrudan bağlantı kurulamazsa (farklı ağlar, WebRTC desteklemeyen tarayıcı) otomatik olarak WebSocket yoluna geçilir.
-- Telefonun üst çubuğunda ve TV lobisinde her oyuncunun bağlantı türü ile gecikmesi (ms) görünür.
-- Telefon kumandası açıkken saniyede birkaç küçük durum mesajı gönderir: hem takılı kalan tuşları düzeltir hem de telefonun Wi‑Fi'sinin uykuya geçip gecikme eklemesini önler.
+- Telefonun üst çubuğunda ve TV lobisinde her oyuncunun bağlantı türü ile gecikmesi (ms, gidiş-dönüş) görünür.
+- **Wi‑Fi uykusu:** Telefonlar birkaç yüz ms trafik görmeyince Wi‑Fi radyosunu uyutur; bu sırada TV'den gelen paketler 100–300 ms bekletilir. Bu yüzden kumanda 50 ms'de bir (menülerde 100 ms'de bir) küçük bir durum mesajı gönderir, TV de hemen yanıtlar. Hem bağlantı uyanık kalır hem takılı kalan tuşlar düzelir hem de gecikme sürekli ölçülür.
+- Doğrudan kanal sırasız çalışır: kaybolan bir paket arkasındaki girdileri bekletmez; TV eski / sırası karışmış girdileri sıra numarasından tanıyıp atar.
+- Bazı modemler cihazlar arası çok yayını (mDNS) engeller ve tarayıcılar yerel IP'yi gizlediği için doğrudan bağlantı kurulamaz. Sunucu TV ile aynı bilgisayardaysa TV, gerçek yerel IP adreslerini de telefona bildirir; böylece bu ağlarda da ⚡ bağlantı kurulur.
 - Kısa bağlantı kopmalarında (2,5 sn'den kısa) oyun durmaz.
+- Gecikme hâlâ yüksekse: telefon ve bilgisayar aynı Wi‑Fi'de mi (misafir ağı değil), mümkünse 5 GHz ağ kullanın; telefonda pil tasarrufu modunu kapatın. Televizyonda **Oyun Modu**'nu açın: kapalıyken televizyonlar görüntüye 50–150 ms ekleyebilir (bu gecikme telefondaki sayıya yansımaz ama hissedilir).
 - Çizim motoru sabit görüntüleri önbelleğe alır; kare başına çizim süresi 1080p'de oyun başına 1–4 ms civarındadır. Ekran kare kaçırmaya başlarsa çözünürlük kendiliğinden düşürülür. Zayıf TV tarayıcıları için lobide **⚡ Performans modu** düğmesi vardır.
 
 ## Oyunlar
 
-19 oyun, hepsi iki kişilik. Klasiklerden ve türlerden ilham alındı ama oyunların isimleri, görselleri ve kuralları özgün.
+20 oyun, hepsi iki kişilik. Klasiklerden ve türlerden ilham alındı ama oyunların isimleri, görselleri ve kuralları özgün.
 
 | Oyun | Tür | Mod | Kumanda | Kısaca |
 |---|---|---|---|---|
@@ -53,6 +56,7 @@ Telefon olmadan denemek için lobide boş oyuncu yerindeki **⌨ Klavye** düğm
 | 🥅 **Penaltı Atışları** | Gizli seçim | Kafa kafaya | Seçim ızgarası | Telefonda gizlice köşe seç: atıcı ve kaleci zihin oyunu. |
 | 🏒 **Neon Hokey** | Masa hokeyi | Kafa kafaya | Dokunmatik saha | Telefon ekranı senin yarı sahan; ilk 7 gol. |
 | 🏎️ **Turbo Pist** | Araba yarışı | Kafa kafaya | Direksiyon + gaz/fren | Tepeden bakışlı 3 turluk yarış, turbo pedleri. |
+| 🌀 **Portal Pinball** | Pinball düellosu | Kafa kafaya | Sol / sağ palet | Yan yana iki masa portallarla bağlı. Tampon, şerit ve hedeflerden puanlar kasada birikir; rakibin deliğine top düşünce kasa × çarpan skora geçer. Kalkan, çarpan ve saldırı topu ekstraları. |
 | 💣 **Bomba Arenası** | Labirent savaşı | Kafa kafaya | Yön + bomba | Kutuları patlat, güçlen; süre bitince arena daralır. |
 | ⚡ **Işık İzi** | Neon yılan | Kafa kafaya | Yön + turbo | Arkanda kalıcı iz bırak, rakibini sıkıştır. |
 | 🥋 **Sumo Halkası** | İtişme | Kafa kafaya | Analog çubuk + hamle | Rakibi daralan halkanın dışına it. |
@@ -96,7 +100,7 @@ Oyun, telefona hangi kumandanın çıkacağını kendisi söyler (`controller`),
 | `dpad` + `dirs: 'lr'` | Büyük sol/sağ düğmeleri | Turbo Pist, Kafa Topu, Dörtle |
 | `stick` | Analog çubuk | Sumo Halkası |
 | `touch` | Tam ekran dokunmatik saha (x, y) | Neon Hokey, Tuğla Kırıcı |
-| `ab` | Sadece iki büyük A / B düğmesi | Halat Çekme |
+| `ab` | Sadece iki büyük A / B düğmesi | Halat Çekme, Portal Pinball |
 | `choice` | Gizli seçim ızgarası (`options`, `cols`) | Penaltı Atışları |
 | `wait` | Bekleme mesajı (sıra rakipteyken) | Dörtle, Topçu Düellosu |
 

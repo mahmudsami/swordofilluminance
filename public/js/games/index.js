@@ -18,6 +18,7 @@ import volley from './volley.js';
 import penalty from './penalty.js';
 import hockey from './hockey.js';
 import racer from './racer.js';
+import pinball from './pinball.js';
 
 // Lobideki filtreler. Takım (coop) oyunları otomatik olarak "takim"da da görünür.
 export const CATEGORIES = [
@@ -34,7 +35,7 @@ export default [
   // spor & yarış
   headball, volley, penalty, hockey, racer,
   // aksiyon
-  bomber, snake, sumo, spaceduel, artillery, crossing, tug,
+  pinball, bomber, snake, sumo, spaceduel, artillery, crossing, tug,
   // bulmaca & masa
   blocks, capsule, connect4,
 ];

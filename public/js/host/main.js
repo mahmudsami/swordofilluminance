@@ -47,6 +47,7 @@ let lastCount = 0;
 let needDraw = true;
 let catFilter = 'all';
 let userPaused = false; // kopma olduğunda oyun zaten kullanıcı tarafından durdurulmuş muydu
+let infoSeq = Date.now(); // telefon başlıklarının sırası (sırasız kanalda eskisi yenisini ezmesin)
 
 function mkInput() {
   return { up: false, down: false, left: false, right: false, a: false, b: false, sx: 0, sy: 0, tx: 0.5, ty: 0.5, touch: false };
@@ -95,6 +96,24 @@ function sendPhone(p, m) {
 
 // ------------------------------------------------------------------ WebRTC (telefon ↔ TV doğrudan)
 const peers = [null, null];
+// Sunucu bu bilgisayarda çalışıyorsa bildirdiği yerel ağ adresleri (TV'nin kendi IP'leri)
+let lanIps = [];
+
+// Tarayıcılar yerel IP'yi gizlemek için "xxxx.local" (mDNS) adresli aday üretir. Çok yayını (multicast)
+// engelleyen Wi-Fi ağlarında telefon bu adı çözemez ve doğrudan bağlantı kurulamaz. TV ile sunucu aynı
+// bilgisayardaysa gerçek IP'leri biliyoruz: aynı adayı bu adreslerle de gönderiyoruz. Yanlış eşleşen
+// adres/port çiftleri zararsızca başarısız olur, doğru olan bağlanır.
+function lanCandidates(c) {
+  if (!lanIps.length || !c || typeof c.candidate !== 'string') return [];
+  const parts = c.candidate.split(' ');
+  // candidate:<temel> <bileşen> <protokol> <öncelik> <adres> <port> typ <tür> ...
+  if (parts.length < 8 || parts[7] !== 'host' || !/\.local$/i.test(parts[4])) return [];
+  return lanIps.map((ip) => {
+    const q = parts.slice();
+    q[4] = ip;
+    return { ...c, candidate: q.join(' ') };
+  });
+}
 
 function closePeer(p) {
   const peer = peers[p];
@@ -141,7 +160,10 @@ async function onRtc(p, m) {
       };
     };
     pc.onicecandidate = (e) => {
-      if (e.candidate && peers[p] === peer) send({ t: 'rtc', to: p, c: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate });
+      if (!e.candidate || peers[p] !== peer) return;
+      const c = e.candidate.toJSON ? e.candidate.toJSON() : e.candidate;
+      send({ t: 'rtc', to: p, c });
+      for (const alt of lanCandidates(c)) send({ t: 'rtc', to: p, c: alt });
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed' && peers[p] === peer) closePeer(p);
@@ -380,6 +402,7 @@ function onPhone(p, m, viaP2P) {
     return;
   }
   if (k === 'st') {
+    if (m.ts) sendPhone(p, { t: 'pong', ts: m.ts });
     const b = m.b | 0;
     for (const kk of KEYS) {
       phoneKeys[p][kk] = !!(b & BIT[kk]);
@@ -575,7 +598,7 @@ function makeApi(token) {
     info: (p, txt) => {
       if (token !== gameToken || padInfo[p] === txt) return;
       padInfo[p] = txt;
-      if (players[p]?.kind === 'phone' && isGame()) sendPhone(p, { t: 'info', text: txt });
+      if (players[p]?.kind === 'phone' && isGame()) sendPhone(p, { t: 'info', text: txt, n: ++infoSeq });
     },
     setPad: (p, patch) => {
       if (token !== gameToken) return;
@@ -1112,6 +1135,7 @@ async function boot() {
   try {
     const info = await (await fetch('/api/info')).json();
     const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
+    if (Array.isArray(info.ips) && (local || info.ips.includes(location.hostname))) lanIps = info.ips.filter((x) => /^(\d+\.){3}\d+$/.test(x));
     if (local && info.ips && info.ips.length) {
       joinBase = `${location.protocol}//${info.ips[0]}:${location.port || info.port}`;
       $('#lanHint').textContent = 'Telefonlar bu bilgisayarla aynı Wi-Fi ağına bağlı olmalı.';

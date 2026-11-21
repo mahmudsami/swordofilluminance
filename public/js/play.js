@@ -40,6 +40,7 @@ let releasePad = null;
 let seq = 0;
 let keys = 0; // basılı tuşların bit maskesi
 let rtt = 0;
+let lastInfo = 0;
 let catFilter = 'all';
 
 const vibrate = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch {} };
@@ -105,6 +106,7 @@ function rtcStop() {
   dc = null;
   try { oldDc && oldDc.close(); } catch {}
   try { oldPc && oldPc.close(); } catch {}
+  if (oldDc) resetRtt();
   updateNet();
 }
 
@@ -125,13 +127,16 @@ function rtcStart() {
   } catch {
     return;
   }
-  const ch = (dc = myPc.createDataChannel('kanepe', { ordered: true }));
+  // Sırasız ama güvenilir kanal: kaybolan bir paket arkasındaki girdileri bekletmez
+  // (TV eski / sırası karışmış girdileri sıra numarasından tanıyıp atar).
+  const ch = (dc = myPc.createDataChannel('kanepe', { ordered: false }));
   rtcPending = [];
   rtcRemote = false;
   ch.onopen = () => {
     if (dc !== ch) return;
     clearTimeout(rtcTimer);
     rtcTries = 0;
+    resetRtt();
     updateNet();
     ping();
     sendState();
@@ -192,15 +197,26 @@ function onRtc(m) {
 }
 
 // ---------------------------------------------------------------- ağ durumu & gecikme
-let pingSent = 0;
+// Gecikme = son ölçümlerin ortancası (tek tük takılmalar sayıyı şişirmesin)
+const rttSamples = [];
+function resetRtt() {
+  rttSamples.length = 0;
+  rtt = 0;
+}
+function addRtt(r) {
+  rttSamples.push(r);
+  if (rttSamples.length > 24) rttSamples.shift();
+  const s = rttSamples.slice().sort((a, b) => a - b);
+  rtt = s[s.length >> 1];
+}
+const stamp = () => Math.round(performance.now() * 10) / 10;
 function ping() {
   if (slot < 0) return;
-  pingSent = performance.now();
-  sendFast({ t: 'in', k: 'ping', ts: Math.round(pingSent * 10) / 10 });
+  sendFast({ t: 'in', k: 'ping', ts: stamp() });
 }
 function sendState() {
   if (slot < 0) return;
-  sendIn({ k: 'st', b: keys, r: Math.round(rtt), v: p2pOpen() ? 1 : 0 });
+  sendIn({ k: 'st', b: keys, r: Math.round(rtt), v: p2pOpen() ? 1 : 0, ts: stamp() });
 }
 
 function updateNet() {
@@ -215,18 +231,22 @@ function updateNet() {
   }
   const ms = Math.round(rtt);
   lat.textContent = `${p2pOpen() ? '⚡' : '☁'} ${ms ? ms + ' ms' : '…'}`;
-  lat.className = 'lat ' + (ms > 150 ? 'slow' : ms > 70 ? 'mid' : 'good');
+  lat.className = 'lat ' + (ms > 120 ? 'slow' : ms > 60 ? 'mid' : 'good');
   lat.title = p2pOpen() ? 'TV ile doğrudan bağlantı' : 'Sunucu üzerinden bağlantı';
 }
 
-// Kumanda açıkken sık durum gönder: hem takılı tuşları düzeltir hem Wi-Fi'yi uyanık tutar
+// Telefonlar Wi-Fi'de birkaç yüz ms trafik görmezse radyoyu uyutur; bu sırada TV'den gelen paketler
+// erişim noktasında 100-300 ms bekletilir. Bu yüzden sürekli küçük mesajlar gönderip TV'nin yanıtını
+// alıyoruz: kumanda açıkken 50 ms'de bir tuş durumu (takılı tuşları da düzeltir), menülerde 100 ms'de
+// bir ping. Aynı yanıtlar gecikmeyi de ölçer.
+let tick = 0;
 setInterval(() => {
-  if (slot >= 0 && current && current.mode === 'pad') sendState();
-}, 150);
-setInterval(() => {
-  ping();
-  updateNet();
-}, 2000);
+  if (slot < 0 || !hostHere) return;
+  tick++;
+  if (current && current.mode === 'pad') sendState();
+  else if (tick % 2 === 0) ping();
+  if (tick % 10 === 0) updateNet();
+}, 50);
 
 // ---------------------------------------------------------------- mesajlar
 function handle(m) {
@@ -234,6 +254,7 @@ function handle(m) {
     case 'joined': {
       slot = m.slot;
       hostHere = !!m.host;
+      lastInfo = 0;
       sess.set('kanepe.code', m.code);
       store.set('kanepe.name', m.name);
       document.body.style.setProperty('--me', PLAYER_COLORS[slot] || PLAYER_COLORS[0]);
@@ -271,6 +292,10 @@ function handle(m) {
       vibrate(m.ms || 60);
       break;
     case 'info': {
+      if (m.n) {
+        if (m.n < lastInfo) break;
+        lastInfo = m.n;
+      }
       const t = $('.pad .title');
       if (t) t.textContent = m.text;
       if (current) current.title = m.text;
@@ -279,8 +304,11 @@ function handle(m) {
     case 'pong':
       if (m.ts) {
         const r = performance.now() - m.ts;
-        if (r >= 0 && r < 5000) rtt = rtt ? rtt * 0.6 + r * 0.4 : r;
-        updateNet();
+        if (r >= 0 && r < 5000) {
+          const first = !rtt;
+          addRtt(r);
+          if (first) updateNet();
+        }
       }
       break;
     case 'rtc':
@@ -293,6 +321,7 @@ function handle(m) {
       break;
     case 'hostback':
       hostHere = true;
+      lastInfo = 0;
       hideOverlay();
       rtcTries = 0;
       setTimeout(rtcStart, 400);
