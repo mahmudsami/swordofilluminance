@@ -43,10 +43,11 @@ Telefon olmadan denemek için lobide boş oyuncu yerindeki **⌨ Klavye** düğm
 
 ## Oyunlar
 
-20 oyun, hepsi iki kişilik. Klasiklerden ve türlerden ilham alındı ama oyunların isimleri, görselleri ve kuralları özgün.
+21 oyun, hepsi iki kişilik. Klasiklerden ve türlerden ilham alındı ama oyunların isimleri, görselleri ve kuralları özgün.
 
 | Oyun | Tür | Mod | Kumanda | Kısaca |
 |---|---|---|---|---|
+| 🧗 **Çifte Macera** | Ortak platform bulmacası | **Takım** | Sol/sağ + zıpla/kullan | 6 bölümlük macera: birbirinizin kafasına çıkın, kasaları itin, plakalarla kapı açın, asansör çağırın, renkli alanlardan geçin, lazerleri atlatın, zamanlı düğmelere aynı anda basın. |
 | 🛡️ **Tank Taburu** | Birlikte savunma | **Takım** | Yön + ateş | Kristal üssü birlikte koruyun; 3 bölüm boyunca düşman tank dalgaları. |
 | 🚀 **Yıldız Nöbeti** | Uzay savaşı | **Takım** | 8 yön + ateş/süper | 3 uzaylı dalgası + dev ana gemi; düşen arkadaşı kalp toplayarak geri getirin. |
 | 💥 **Tuğla Kırıcı** | Tuğla kırma | **Takım** | Dokunmatik kaydırma | İki raket, ortak canlar, güçlendirmeler; 3 bölüm. |
@@ -67,6 +68,14 @@ Telefon olmadan denemek için lobide boş oyuncu yerindeki **⌨ Klavye** düğm
 | 🧱 **Blok Düellosu** | Düşen bloklar | Kafa kafaya | Yön + döndür/bırak | Satır tamamla, rakibe çöp satır gönder. |
 | 💊 **Kapsül Kapışması** | Renk eşleştirme | Kafa kafaya | Yön + döndür | Aynı renkten 4'lü yapıp mikropları ilk temizleyen kazanır. |
 | 🔴 **Dörtle** | Masa oyunu | Kafa kafaya | Sol/sağ + bırak | Sırayla taş bırak, 4'lü bağlayan kazanır. |
+
+### Çifte Macera hakkında
+
+- Her bölüm tek ekrandır ve ancak iki oyuncu birlikte çalışınca geçilir; ikiniz de çıkış kapısına girince bölüm biter.
+- Bölümler: **İlk Adımlar** (kafaya çıkma, plaka), **Renkli Kapılar** (renkli alanlar, köprü, şalter), **Kasa Ustası** (kasa basamağı, iki plakalı kapı), **Asansör** (hareketli platformlar, karşılıklı çağrılan asansörler), **Lazer Labirenti** (lazer + kasa gölgesi, kısa süreli düğmeler), **Son Kule** (ağır plaka, renkli alanlar, iki düğmeyi aynı anda basma).
+- Açılan bölümler ve en iyi süre / elmas sayısı o TV'nin tarayıcısında saklanır; oyun açılınca bölüm seçilebilir.
+- Takılırsanız **B'yi basılı tutun**: bölüm baştan başlar.
+- Bölümler `public/js/games/platformer-levels.js` içinde metin haritalardır; yeni bölüm eklemek için bir harita ve nesne tablosu yazmak yeterli (dosyanın başında açıklama var).
 
 ## İnternette yayınlama
 
@@ -97,7 +106,7 @@ Oyun, telefona hangi kumandanın çıkacağını kendisi söyler (`controller`),
 |---|---|---|
 | `dpad` + `dirs: 4` | Artı şeklinde yön tuşları + A/B | Blok, Bomba, Tank, Labirent |
 | `dpad` + `dirs: 8` | Çapraz destekli yön tuşları | Yıldız Nöbeti |
-| `dpad` + `dirs: 'lr'` | Büyük sol/sağ düğmeleri | Turbo Pist, Kafa Topu, Dörtle |
+| `dpad` + `dirs: 'lr'` | Büyük sol/sağ düğmeleri | Çifte Macera, Turbo Pist, Kafa Topu, Dörtle |
 | `stick` | Analog çubuk | Sumo Halkası |
 | `touch` | Tam ekran dokunmatik saha (x, y) | Neon Hokey, Tuğla Kırıcı |
 | `ab` | Sadece iki büyük A / B düğmesi | Halat Çekme, Portal Pinball |
@@ -134,5 +143,7 @@ export default {
 ```
 
 `api` içinde: `players` (isim, renk), `input[p]` (anlık tuş / çubuk / dokunma durumu), `axis(p)`, `sfx(ad)`, `buzz(p, ms)` (telefonu titret), `info(p, yazı)` (telefondaki başlık), `setPad(p, düzen)`, `end({ winner })` ya da `end({ coop: true, win })`.
+
+Basılıp hemen bırakılan çok kısa dokunuşlar iki kare arasında kalabilir; zıplama, ateş gibi tek seferlik eylemleri `input` durumundan değil `onKey` ile yakalayın.
 
 Performans için sabit görüntüleri `Layer` (bir kez çizilen katman) ve `sprite` (önbellekli küçük görüntü) ile çizin; her karede `shadowBlur` kullanmaktan kaçının (yerine `glow()` hazır ışıma görüntüsü var).

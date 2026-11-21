@@ -19,6 +19,7 @@ import penalty from './penalty.js';
 import hockey from './hockey.js';
 import racer from './racer.js';
 import pinball from './pinball.js';
+import platformer from './platformer.js';
 
 // Lobideki filtreler. Takım (coop) oyunları otomatik olarak "takim"da da görünür.
 export const CATEGORIES = [
@@ -31,7 +32,7 @@ export const CATEGORIES = [
 
 export default [
   // takım
-  tanks, shooter, breakout, maze,
+  platformer, tanks, shooter, breakout, maze,
   // spor & yarış
   headball, volley, penalty, hockey, racer,
   // aksiyon

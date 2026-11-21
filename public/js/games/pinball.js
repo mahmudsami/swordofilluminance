@@ -177,6 +177,7 @@ class PinballGame {
       { t: 1, time: 0.8 },
     ];
     this.toasts = [];
+    this.tap = [[0, 0], [0, 0]]; // ekrandaki sol / sağ düğmenin en kısa basılı kalma süresi
     this.infoT = 0;
     this.phase = 'play';
     this.rescues = 0; // test sayaçları: masadan taşan / takılan top
@@ -223,15 +224,21 @@ class PinballGame {
 
   pressed(p, side) {
     const s = this.api.input[p];
-    const leftBtn = s.left || s.b;
-    const rightBtn = s.right || s.a;
+    const tp = this.tap[p];
+    const leftBtn = s.left || s.b || tp[0] > 0;
+    const rightBtn = s.right || s.a || tp[1] > 0;
     // 2. masa aynalı çizilir: ekrandaki sol palet onun yerel sağ paletidir
     if (p === 0) return side === 0 ? leftBtn : rightBtn;
     return side === 1 ? leftBtn : rightBtn;
   }
 
   onKey(p, k, down) {
-    if (down && this.phase === 'play' && (k === 'left' || k === 'right' || k === 'a' || k === 'b')) this.api.sfx('lock');
+    if (!down || this.phase !== 'play') return;
+    // çok kısa dokunuşta bile palet en az bir an kalksın
+    if (k === 'left' || k === 'b') this.tap[p][0] = 0.12;
+    else if (k === 'right' || k === 'a') this.tap[p][1] = 0.12;
+    else return;
+    this.api.sfx('lock');
   }
 
   // ---------------------------------------------------------------- olaylar
@@ -453,6 +460,10 @@ class PinballGame {
     this.pops.update(dt);
     this.shake.update(dt);
     if (this.infoT > 0) this.infoT -= dt;
+    for (const tp of this.tap) {
+      if (tp[0] > 0) tp[0] -= dt;
+      if (tp[1] > 0) tp[1] -= dt;
+    }
     for (const t of this.toasts) t.t += dt;
     if (this.toasts.length && this.toasts[0].t > this.toasts[0].d) this.toasts.shift();
     if (this.phase === 'over') {
