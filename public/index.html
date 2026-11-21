@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KANEPE — Telefonla oynanan parti oyunları</title>
+  <meta name="description" content="Ekranı aç, telefonunu kumandaya çevir, arkadaşınla kapış." />
+  <meta name="theme-color" content="#0e0c22" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/common.css" />
+  <script>
+    // Telefonlar doğrudan katılma ekranına gitsin
+    (function () {
+      var small = Math.min(screen.width, screen.height) < 600;
+      var touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+      if (small && touch && !/[?&]stay/.test(location.search)) location.replace('/play' + location.search);
+    })();
+  </script>
+  <style>
+    body { display: grid; place-items: center; min-height: 100%; padding: 32px 16px; }
+    main { position: relative; z-index: 1; width: min(980px, 100%); text-align: center; }
+    .logo { font-size: clamp(54px, 9vw, 104px); }
+    .tag { color: var(--muted); font-size: clamp(18px, 2.4vw, 26px); margin: 12px 0 40px; }
+    .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 22px; }
+    .choice {
+      display: block; text-decoration: none; color: inherit; text-align: left;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 26px; padding: 28px;
+      transition: transform .15s ease, border-color .15s ease, background .15s ease;
+    }
+    .choice:hover, .choice:focus-visible { transform: translateY(-4px); border-color: rgba(255,255,255,.25); background: var(--panel2); outline: none; }
+    .choice .ic { font-size: 54px; line-height: 1; }
+    .choice h2 { margin: 14px 0 6px; font-size: 30px; line-height: 1.1; }
+    .choice p { margin: 0; color: var(--muted); font-size: 18px; line-height: 1.35; }
+    .choice.tv { box-shadow: inset 0 0 0 2px rgba(138, 92, 255, .35); }
+    .steps { margin-top: 44px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; color: var(--muted); font-size: 17px; text-align: left; }
+    .steps div { background: rgba(255,255,255,.03); border-radius: 18px; padding: 16px 18px; border: 1px solid var(--line); }
+    .steps b { color: var(--accent); font-size: 22px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="bg-blobs"><i></i><i></i><i></i></div>
+  <main>
+    <div class="logo"><span class="mark"><i></i><i></i><i></i><i></i></span>KANEPE</div>
+    <p class="tag">Ekranı aç, telefonunu kumandaya çevir, arkadaşınla kapış.</p>
+    <div class="choices">
+      <a class="choice tv" href="/tv">
+        <div class="ic">📺</div>
+        <h2>Bu ekran TV olsun</h2>
+        <p>Oyunlar bu ekranda oynanır. Bilgisayar, TV tarayıcısı ya da tablet olabilir.</p>
+      </a>
+      <a class="choice" href="/play">
+        <div class="ic">📱</div>
+        <h2>Telefonla katıl</h2>
+        <p>TV ekranındaki 4 harfli kodu gir, telefonun kumandaya dönüşsün.</p>
+      </a>
+    </div>
+    <div class="steps">
+      <div><b>1</b>Büyük ekranda bu sayfayı açıp “TV olsun”a bas.</div>
+      <div><b>2</b>İki telefonla QR kodu okut ya da kodu gir.</div>
+      <div><b>3</b>Oyunu seç, hazır ol, kapışın!</div>
+    </div>
+  </main>
+</body>
+</html>

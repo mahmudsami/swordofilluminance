@@ -1,0 +1,95 @@
+:root {
+  --bg: #0e0c22;
+  --bg2: #17143a;
+  --panel: #1d1a45;
+  --panel2: #27235a;
+  --line: rgba(255, 255, 255, 0.09);
+  --text: #f5f2ff;
+  --muted: #a7a2d1;
+  --p1: #ff4f7b;
+  --p2: #2fc7ff;
+  --accent: #ffd23f;
+  --accent2: #8a5cff;
+  --good: #46e38a;
+  --bad: #ff5a5a;
+  --font: 'Baloo 2', system-ui, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.logo {
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+}
+
+.logo .mark {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.09em;
+  width: 1.05em;
+  height: 1.05em;
+  transform: rotate(-8deg);
+}
+
+.logo .mark i {
+  border-radius: 0.14em;
+  display: block;
+}
+
+.logo .mark i:nth-child(1) { background: var(--p1); }
+.logo .mark i:nth-child(2) { background: var(--accent); }
+.logo .mark i:nth-child(3) { background: var(--accent2); }
+.logo .mark i:nth-child(4) { background: var(--p2); }
+
+.bg-blobs {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.bg-blobs i {
+  position: absolute;
+  width: 46vmax;
+  height: 46vmax;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.22;
+  animation: drift 26s ease-in-out infinite alternate;
+}
+
+.bg-blobs i:nth-child(1) { background: var(--accent2); left: -12vmax; top: -14vmax; }
+.bg-blobs i:nth-child(2) { background: var(--p1); right: -16vmax; top: 20vh; animation-delay: -8s; opacity: 0.14; }
+.bg-blobs i:nth-child(3) { background: var(--p2); left: 20vw; bottom: -22vmax; animation-delay: -15s; opacity: 0.15; }
+
+@keyframes drift {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(6vmax, 4vmax) scale(1.15); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-blobs i { animation: none; }
+}

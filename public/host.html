@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KANEPE — TV Ekranı</title>
+  <meta name="theme-color" content="#0e0c22" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/common.css" />
+  <link rel="stylesheet" href="/css/host.css" />
+</head>
+<body>
+  <div class="bg-blobs"><i></i><i></i><i></i></div>
+  <canvas id="game" class="hidden"></canvas>
+
+  <!-- LOBİ -->
+  <div id="lobby" class="screen">
+    <header class="top">
+      <div class="logo"><span class="mark"><i></i><i></i><i></i><i></i></span>KANEPE</div>
+      <div class="top-actions">
+        <button id="soundBtn" class="pill" title="Ses">🔇 Sesi aç</button>
+        <button id="fsBtn" class="pill" title="Tam ekran">⛶ Tam ekran</button>
+      </div>
+    </header>
+    <div class="lobby-grid">
+      <aside class="joinbox">
+        <div class="joinrow">
+          <div class="qr"><img id="qr" alt="Katılma QR kodu" /></div>
+          <div class="joininfo">
+            <div class="step">Telefonunla QR'ı okut<br />ya da şu adrese gir:</div>
+            <div class="url" id="joinUrl">…</div>
+            <div class="code-label">ODA KODU</div>
+            <div class="code" id="roomCode">····</div>
+          </div>
+        </div>
+        <div class="slots">
+          <div class="slot" data-p="0"></div>
+          <div class="slot" data-p="1"></div>
+        </div>
+        <div class="guide">
+          <div><b>1</b><span>İki telefonla QR kodu okutun ya da adresi açıp kodu girin.</span></div>
+          <div><b>2</b><span>Telefondan bir oyun seçin, kuralları okuyup <em>HAZIRIM</em>’a basın.</span></div>
+          <div><b>3</b><span>Telefon kumandaya dönüşür. ❚❚ ile oyunu duraklatabilirsiniz.</span></div>
+        </div>
+        <p class="lanhint" id="lanHint"></p>
+      </aside>
+      <section class="gamesbox">
+        <h2>Oyunlar <small>Telefonundan ya da buradan seç</small></h2>
+        <div class="ggrid" id="gameGrid"></div>
+      </section>
+    </div>
+    <footer class="keys">
+      <span><b>Klavye</b> 1. oyuncu: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>F</kbd>/<kbd>G</kbd></span>
+      <span>2. oyuncu: <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd> + <kbd>K</kbd>/<kbd>L</kbd></span>
+      <span><kbd>Esc</kbd> duraklat</span>
+    </footer>
+  </div>
+
+  <!-- OYUN TANITIMI -->
+  <div id="intro" class="screen hidden">
+    <div class="introcard">
+      <div class="introhead">
+        <div class="bigicon" id="introIcon"></div>
+        <div>
+          <div class="introtag" id="introTag"></div>
+          <h1 id="introName"></h1>
+          <p id="introDesc"></p>
+        </div>
+      </div>
+      <div class="introbody">
+        <img class="introprev" id="introPrev" alt="" />
+        <div>
+          <h3>Nasıl oynanır?</h3>
+          <ul id="introHow" class="how"></ul>
+          <div class="kbdhint" id="introKeys"></div>
+        </div>
+      </div>
+      <div class="readyrow" id="readyRow"></div>
+      <div class="introactions">
+        <button class="pill" id="introBack">← Oyunlar</button>
+        <span class="introwait" id="introWait">Telefonundan <b>HAZIRIM</b>’a bas</span>
+        <button class="pill strong" id="introStart">Hemen başlat ▶</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: duraklatma / sonuç / bağlantı -->
+  <div id="modal" class="modal hidden">
+    <div class="modalcard">
+      <div class="modalicon" id="modalIcon"></div>
+      <h1 id="modalTitle"></h1>
+      <p id="modalText"></p>
+      <div class="tally" id="modalTally"></div>
+      <div class="modalbtns" id="modalBtns"></div>
+      <div class="modalhint" id="modalHint"></div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script type="module" src="/js/host/main.js"></script>
+</body>
+</html>
