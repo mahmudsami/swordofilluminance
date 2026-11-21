@@ -1,7 +1,7 @@
 // PORTAL PİNBALL — iki pinball masası yan yana. Masaların iç kenarındaki portal ağızları ortadaki
 // tüplerle birbirine bağlı: ağza giren top rakibin masasına geçer. Tampon, sapan, şerit ve hedeflerden
 // kazanılan puanlar KASA'da birikir; rakibin deliğine top düşünce (GOL) kasa, çarpanıyla birlikte skora geçer.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, rand, sprite, Layer, glow } from '../host/gfx.js';
+import { W, H, PCOL, RES, drawText, rr, Particles, Popups, Shake, banner, shade, rgba, rand, sprite, Layer, glow } from '../host/gfx.js';
 
 const TW = 600; // masa yerel genişliği (iç kenar x = 600 tarafı)
 const TH = 720;
@@ -163,6 +163,7 @@ class PinballGame {
     }));
     // Masa katmanları ekrandaki son boyutlarında (ve 2. masa aynalanmış olarak) çizilir:
     // her karede ölçeksiz, birebir kopyalanırlar.
+    this.bgLayer = new Layer(W, H, (g) => this.paintBg(g));
     this.layers = [0, 1].map((p) => new Layer(TW * S, TH * S, (g) => {
       if (p === 0) g.scale(S, S);
       else {
@@ -695,6 +696,12 @@ class PinballGame {
       g.fillStyle = shade(col, -0.45);
       g.fill();
     }
+    // portal ışımaları (sabit; yalnız top geçerken ek parlama her karede çizilir)
+    for (const m of MOUTHS) {
+      const cy = (m.y0 + m.y1) / 2;
+      const gr = ((m.y1 - m.y0) / 2 - 3) * 2.2;
+      g.drawImage(glow(col, 40, 0.7), 588 - gr, cy - gr, gr * 2, gr * 2);
+    }
     // portal ağızları: duvardaki tünel girişleri
     for (const m of MOUTHS) {
       g.fillStyle = '#05040f';
@@ -872,9 +879,10 @@ class PinballGame {
       const m = MOUTHS[i];
       const cy = (m.y0 + m.y1) / 2;
       const r = (m.y1 - m.y0) / 2 - 3;
-      const pulse = 1 + Math.max(0, tb.portalFx[i]);
-      const gr = r * 2.2 * pulse;
-      g.drawImage(glow(col, 40, 0.7), 588 - gr, cy - gr, gr * 2, gr * 2);
+      if (tb.portalFx[i] > 0) {
+        const gr = r * 2.2 * (1 + tb.portalFx[i]);
+        g.drawImage(glow(col, 40, 0.7), 588 - gr, cy - gr, gr * 2, gr * 2);
+      }
       g.strokeStyle = shade(col, 0.45);
       g.lineWidth = 3;
       for (let k = 0; k < 3; k++) {
@@ -900,7 +908,7 @@ class PinballGame {
       if (b.transit || b.t !== p) continue;
       const t = b.trail;
       g.fillStyle = 'rgba(220,230,255,.6)';
-      for (let i = 0; i < t.length; i += 2) {
+      for (let i = RES.low ? t.length : 2; i < t.length; i += 4) {
         g.globalAlpha = (i / t.length) * 0.45;
         g.beginPath();
         g.arc(t[i], t[i + 1], BR * (0.35 + (0.5 * i) / t.length), 0, Math.PI * 2);
@@ -912,10 +920,10 @@ class PinballGame {
     g.restore();
   }
 
-  draw(g) {
+  // zemin, ortadaki portal tüpleri ve sabit yazılar: bir kez çizilir
+  paintBg(g) {
     g.fillStyle = '#06051a';
     g.fillRect(0, 0, W, H);
-    // ortadaki portal tüpleri
     const x0 = OX[0] + 578 * S;
     const x1 = OX[1] + (TW - 578) * S;
     for (const m of MOUTHS) {
@@ -930,6 +938,23 @@ class PinballGame {
       g.strokeStyle = grad;
       g.lineWidth = 3;
       g.stroke();
+    }
+    const cx = W / 2;
+    drawText(g, 'KASA', cx, 80, { size: 16, color: '#9a93d6', weight: 800 });
+    drawText(g, 'PORTAL', cx, 226, { size: 13, color: '#8f88c9', weight: 800 });
+    drawText(g, 'GOL =', cx, 440, { size: 19, color: '#ffd23f', weight: 800 });
+    drawText(g, 'kasa × çarpan', cx, 464, { size: 14, color: '#b9b3ea', weight: 700 });
+    drawText(g, '+ 1000', cx, 484, { size: 14, color: '#b9b3ea', weight: 700 });
+  }
+
+  draw(g) {
+    this.bgLayer.draw(g);
+    // tüplerde akan enerji
+    const x0 = OX[0] + 578 * S;
+    const x1 = OX[1] + (TW - 578) * S;
+    for (const m of MOUTHS) {
+      const cy = OY + ((m.y0 + m.y1) / 2) * S;
+      const h = (m.y1 - m.y0) * S * 0.86;
       for (let k = 0; k < 4; k++) {
         const f = (this.time * 0.7 + k / 4) % 1;
         g.fillStyle = rgba(PCOL[0], 0.5);
@@ -958,31 +983,26 @@ class PinballGame {
 
     // üst bilgi: isimler, skorlar, süre
     const names = this.api.players.map((pl) => pl.name);
-    text(g, names[0], OX[0], 26, { size: 24, color: PCOL[0], weight: 800, align: 'left' });
-    text(g, fmt(this.score[0]), OX[0] + TW * S, 26, { size: 32, color: '#ffffff', weight: 800, align: 'right' });
-    text(g, names[1], OX[1] + TW * S, 26, { size: 24, color: PCOL[1], weight: 800, align: 'right' });
-    text(g, fmt(this.score[1]), OX[1], 26, { size: 32, color: '#ffffff', weight: 800, align: 'left' });
+    drawText(g, names[0], OX[0], 26, { size: 24, color: PCOL[0], weight: 800, align: 'left' });
+    drawText(g, fmt(this.score[0]), OX[0] + TW * S, 26, { size: 32, color: '#ffffff', weight: 800, align: 'right' });
+    drawText(g, names[1], OX[1] + TW * S, 26, { size: 24, color: PCOL[1], weight: 800, align: 'right' });
+    drawText(g, fmt(this.score[1]), OX[1], 26, { size: 32, color: '#ffffff', weight: 800, align: 'left' });
     const c = Math.ceil(this.clock);
-    if (this.golden) text(g, 'ALTIN GOL', W / 2, 26, { size: 20, color: '#ffd23f', weight: 800 });
-    else text(g, `${Math.floor(c / 60)}:${String(c % 60).padStart(2, '0')}`, W / 2, 26, { size: 30, color: c <= 10 ? '#ff8a8a' : '#ffffff', weight: 800 });
+    if (this.golden) drawText(g, 'ALTIN GOL', W / 2, 26, { size: 20, color: '#ffd23f', weight: 800 });
+    else drawText(g, `${Math.floor(c / 60)}:${String(c % 60).padStart(2, '0')}`, W / 2, 26, { size: 30, color: c <= 10 ? '#ff8a8a' : '#ffffff', weight: 800 });
     // orta sütun: kasalar, kural, kalkanlar
     const cx = W / 2;
-    text(g, 'KASA', cx, 80, { size: 16, color: '#9a93d6', weight: 800 });
     for (const p of [0, 1]) {
       const tb = this.tables[p];
       const y = 108 + p * 54;
-      text(g, fmt(tb.bank), cx, y, { size: 24, color: PCOL[p], weight: 800 });
-      text(g, `×${tb.mult}`, cx, y + 23, { size: 17, color: tb.mult > 1 ? '#46e38a' : '#8f88c9', weight: 800 });
+      drawText(g, fmt(tb.bank), cx, y, { size: 24, color: PCOL[p], weight: 800 });
+      drawText(g, `×${tb.mult}`, cx, y + 23, { size: 17, color: tb.mult > 1 ? '#46e38a' : '#8f88c9', weight: 800 });
     }
-    text(g, 'PORTAL', cx, 226, { size: 13, color: '#8f88c9', weight: 800 });
-    text(g, 'GOL =', cx, 440, { size: 19, color: '#ffd23f', weight: 800 });
-    text(g, 'kasa × çarpan', cx, 464, { size: 14, color: '#b9b3ea', weight: 700 });
-    text(g, '+ 1000', cx, 484, { size: 14, color: '#b9b3ea', weight: 700 });
     let sy = 540;
     for (const p of [0, 1]) {
       const tb = this.tables[p];
       if (tb.shield <= 0) continue;
-      text(g, `KALKAN ${Math.ceil(tb.shield)}`, cx, sy, { size: 15, color: PCOL[p], weight: 800 });
+      drawText(g, `KALKAN ${Math.ceil(tb.shield)}`, cx, sy, { size: 15, color: PCOL[p], weight: 800 });
       sy += 24;
     }
     this.pops.draw(g);
@@ -991,10 +1011,10 @@ class PinballGame {
       const a = Math.min(1, t.t * 5, (t.d - t.t) * 3);
       const [gx] = this.toGlobal(t.c, 300, 0);
       const sc = t.t < 0.15 ? 0.7 + (t.t / 0.15) * 0.3 : 1;
-      text(g, 'GOL!', gx, 215, { size: 76 * sc, color: PCOL[t.p], weight: 800, stroke: 'rgba(0,0,0,.65)', sw: 10, alpha: a });
-      text(g, `${names[t.p]} +${fmt(t.gain)}`, gx, 270, { size: 30, color: '#ffffff', weight: 800, stroke: 'rgba(0,0,0,.6)', sw: 7, alpha: a });
+      drawText(g, 'GOL!', gx, 215, { size: 76, scale: sc, color: PCOL[t.p], weight: 800, stroke: 'rgba(0,0,0,.65)', sw: 10, alpha: a });
+      drawText(g, `${names[t.p]} +${fmt(t.gain)}`, gx, 270, { size: 30, color: '#ffffff', weight: 800, stroke: 'rgba(0,0,0,.6)', sw: 7, alpha: a });
       const det = t.bank ? `kasa ${fmt(t.bank)} × ${t.mult} + ${fmt(GOAL_BONUS)}` : `gol bonusu ${fmt(GOAL_BONUS)}`;
-      text(g, det, gx, 304, { size: 19, color: '#e6e2ff', weight: 700, stroke: 'rgba(0,0,0,.6)', sw: 6, alpha: a });
+      drawText(g, det, gx, 304, { size: 19, color: '#e6e2ff', weight: 700, stroke: 'rgba(0,0,0,.6)', sw: 6, alpha: a });
     }
     if (this.phase === 'over' || this.phase === 'done') {
       const w = this.winner;

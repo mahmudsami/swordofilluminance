@@ -1,7 +1,7 @@
 // ÇİFTE MACERA — iki kişilik ortak platform oyunu. Her bölüm ancak birlikte çözülebilen bir bulmaca:
 // birbirinin kafasına çıkma, basınç plakaları, şalterler, renkli alanlar, kasalar, asansörler,
 // lazerler ve zamanlı düğmeler. Açılan bölümler bu TV'de saklanır.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, sprite, Layer, glow, eyes } from '../host/gfx.js';
+import { W, H, PCOL, drawText, rr, Particles, Popups, Shake, banner, shade, rgba, sprite, Layer, glow, eyes } from '../host/gfx.js';
 import LEVELS from './platformer-levels.js';
 
 const T = 40; // kare boyu
@@ -1045,8 +1045,8 @@ class CoopGame {
     g.fillRect(0, 0, W, H);
     g.fillStyle = 'rgba(255,255,255,.04)';
     for (let i = 0; i < 12; i++) g.fillRect(i * 120 + 20, H - 140 - (i % 3) * 60, 70, 300);
-    text(g, 'ÇİFTE MACERA', W / 2, 78, { size: 64, color: '#ffd23f', weight: 800, stroke: 'rgba(0,0,0,.4)', sw: 10 });
-    text(g, 'Bölüm seç', W / 2, 132, { size: 26, color: '#d9d4ff', weight: 700 });
+    drawText(g, 'ÇİFTE MACERA', W / 2, 78, { size: 64, color: '#ffd23f', weight: 800, stroke: 'rgba(0,0,0,.4)', sw: 10 });
+    drawText(g, 'Bölüm seç', W / 2, 132, { size: 26, color: '#d9d4ff', weight: 700 });
   }
 
   // ---------------------------------------------------------------- çizim: hareketli öğeler
@@ -1126,7 +1126,7 @@ class CoopGame {
       g.beginPath();
       g.arc(cx, pl.y - 22, 13, -Math.PI / 2, -Math.PI / 2 + t * Math.PI * 2);
       g.stroke();
-      text(g, 'baştan', cx, pl.y - 44, { size: 14, color: '#ffd23f', weight: 800, stroke: 'rgba(0,0,0,.6)', sw: 4 });
+      drawText(g, 'baştan', cx, pl.y - 44, { size: 14, color: '#ffd23f', weight: 800, stroke: 'rgba(0,0,0,.6)', sw: 4 });
     }
   }
 
@@ -1263,7 +1263,7 @@ class CoopGame {
           g.fillStyle = PCOL[e.who];
           g.fillRect(e.x + e.w / 2 - 5, by - ph - 3, 10, 3);
         }
-        if (e.need > 1) text(g, `×${e.need}`, e.x + e.w / 2, by - 18, { size: 15, color: e.col, weight: 800, stroke: 'rgba(0,0,0,.6)', sw: 4 });
+        if (e.need > 1) drawText(g, `×${e.need}`, e.x + e.w / 2, by - 18, { size: 15, color: e.col, weight: 800, stroke: 'rgba(0,0,0,.6)', sw: 4 });
       } else if (e.type === 'lever') {
         const bx = e.x + T / 2;
         const by = e.y + e.h;
@@ -1346,7 +1346,7 @@ class CoopGame {
     if (ex) {
       const n = this.players.filter((p) => !p.dead && overlap(p, ex)).length;
       g.drawImage(glow(n === 2 ? '#46e38a' : '#ffd23f', 40, 0.4 + 0.15 * Math.sin(this.time * 4)), ex.x + T / 2 - 40, ex.y + 4, 80, 80);
-      text(g, `${n}/2`, ex.x + T / 2, ex.y - 22, { size: 18, color: n === 2 ? '#46e38a' : '#ffd23f', weight: 800, stroke: 'rgba(0,0,0,.6)', sw: 5 });
+      drawText(g, `${n}/2`, ex.x + T / 2, ex.y - 22, { size: 18, color: n === 2 ? '#46e38a' : '#ffd23f', weight: 800, stroke: 'rgba(0,0,0,.6)', sw: 5 });
     }
     // elmaslar
     const gs = this.gemSprite();
@@ -1395,16 +1395,16 @@ class CoopGame {
       g.strokeStyle = sel ? '#ffd23f' : 'rgba(255,255,255,.12)';
       g.lineWidth = sel ? 5 : 2;
       g.stroke();
-      text(g, String(i + 1), x + 46, y + ch / 2, { size: 72, color: open ? '#ffd23f' : '#4b4470', weight: 800 });
-      text(g, LEVELS[i].name, x + 96, y + 56, { size: 28, color: open ? '#ffffff' : '#5d5684', weight: 800, align: 'left' });
-      if (!open) text(g, 'kilitli', x + 96, y + 100, { size: 20, color: '#5d5684', weight: 700, align: 'left' });
+      drawText(g, String(i + 1), x + 46, y + ch / 2, { size: 72, color: open ? '#ffd23f' : '#4b4470', weight: 800 });
+      drawText(g, LEVELS[i].name, x + 96, y + 56, { size: 28, color: open ? '#ffffff' : '#5d5684', weight: 800, align: 'left' });
+      if (!open) drawText(g, 'kilitli', x + 96, y + 100, { size: 20, color: '#5d5684', weight: 700, align: 'left' });
       else if (best) {
         const total = this.gemTotals[i];
-        text(g, `✓ tamamlandı · ${fmtTime(best.time)}`, x + 96, y + 98, { size: 18, color: '#46e38a', weight: 700, align: 'left' });
-        text(g, `elmas ${best.gems}/${total}`, x + 96, y + 128, { size: 18, color: '#7fe3ff', weight: 700, align: 'left' });
-      } else text(g, 'yeni', x + 96, y + 100, { size: 20, color: '#ff9a3d', weight: 800, align: 'left' });
+        drawText(g, `✓ tamamlandı · ${fmtTime(best.time)}`, x + 96, y + 98, { size: 18, color: '#46e38a', weight: 700, align: 'left' });
+        drawText(g, `elmas ${best.gems}/${total}`, x + 96, y + 128, { size: 18, color: '#7fe3ff', weight: 700, align: 'left' });
+      } else drawText(g, 'yeni', x + 96, y + 100, { size: 20, color: '#ff9a3d', weight: 800, align: 'left' });
     }
-    text(g, '◀ ▶  bölüm seç   ·   A  başla   ·   oyunda B basılı: bölümü baştan başlat', W / 2, H - 40, { size: 22, color: '#d9d4ff', weight: 700 });
+    drawText(g, '◀ ▶  bölüm seç   ·   A  başla   ·   oyunda B basılı: bölümü baştan başlat', W / 2, H - 40, { size: 22, color: '#d9d4ff', weight: 700 });
     // köşede iki kahraman
     const bob = Math.sin(this.time * 3) * 4;
     this.drawPlayer(g, { p: 0, x: 120, y: H - 140 + bob, vx: 0, vy: 0, face: 1, squash: 0, walk: 0, ground: 1, holdB: 0 });
@@ -1427,19 +1427,19 @@ class CoopGame {
     // üst bilgi şeridi
     g.fillStyle = 'rgba(8,6,24,.6)';
     g.fillRect(0, 0, W, 36);
-    text(g, `BÖLÜM ${this.li + 1}/${LEVELS.length} · ${this.L.def.name}`, 16, 19, { size: 21, color: '#ffffff', weight: 800, align: 'left' });
+    drawText(g, `BÖLÜM ${this.li + 1}/${LEVELS.length} · ${this.L.def.name}`, 16, 19, { size: 21, color: '#ffffff', weight: 800, align: 'left' });
     const got = this.gems.filter((x) => x.got).length;
     g.drawImage(this.gemSprite(), W - 250, 5, 26, 26);
-    text(g, `${got}/${this.gems.length}`, W - 220, 19, { size: 21, color: '#7fe3ff', weight: 800, align: 'left' });
-    text(g, `düşüş ${this.levelDeaths}`, W - 16, 19, { size: 19, color: '#ffb3c0', weight: 700, align: 'right' });
-    text(g, fmtTime(this.levelTime), W / 2 + 160, 19, { size: 20, color: '#d9d4ff', weight: 700 });
+    drawText(g, `${got}/${this.gems.length}`, W - 220, 19, { size: 21, color: '#7fe3ff', weight: 800, align: 'left' });
+    drawText(g, `düşüş ${this.levelDeaths}`, W - 16, 19, { size: 19, color: '#ffb3c0', weight: 700, align: 'right' });
+    drawText(g, fmtTime(this.levelTime), W / 2 + 160, 19, { size: 20, color: '#d9d4ff', weight: 700 });
     if (this.hintT > 0 && this.state === 'play') {
       const a = Math.min(1, this.hintT);
       g.globalAlpha = a;
       g.fillStyle = 'rgba(8,6,24,.78)';
       rr(g, W / 2 - 520, H - 58, 1040, 44, 14);
       g.fill();
-      text(g, this.L.def.hint, W / 2, H - 36, { size: 21, color: '#ffe9a8', weight: 700 });
+      drawText(g, this.L.def.hint, W / 2, H - 36, { size: 21, color: '#ffe9a8', weight: 700 });
       g.globalAlpha = 1;
     }
     if (this.state === 'intro') banner(g, `BÖLÜM ${this.li + 1}`, this.L.def.name, '#ffd23f', 1.6 - this.phaseT);

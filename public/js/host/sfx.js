@@ -98,10 +98,17 @@ const SOUNDS = {
   eat: () => tone(760, 0.07, { vol: 0.1, type: 'square', slide: 1.5 }),
 };
 
+// Yoğun anlarda (ör. pinball'da top tamponlar arasında sekerken) yüzlerce ses üst üste binip zayıf
+// cihazları yormasın: 200 ms içinde en fazla 12 ses; önemli sesler her zaman çalar.
+const recent = [];
+const ALWAYS = new Set(['goal', 'win', 'lose', 'count', 'go', 'die', 'power', 'join', 'leave']);
 export function play(name) {
   if (muted || !ctx || ctx.state !== 'running') return;
   const now = performance.now();
   if (last[name] && now - last[name] < 35) return;
+  while (recent.length && now - recent[0] > 200) recent.shift();
+  if (recent.length >= 12 && !ALWAYS.has(name)) return;
+  recent.push(now);
   last[name] = now;
   const f = SOUNDS[name];
   if (f) {

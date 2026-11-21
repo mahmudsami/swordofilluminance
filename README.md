@@ -39,7 +39,7 @@ Telefon olmadan denemek için lobide boş oyuncu yerindeki **⌨ Klavye** düğm
 - Bazı modemler cihazlar arası çok yayını (mDNS) engeller ve tarayıcılar yerel IP'yi gizlediği için doğrudan bağlantı kurulamaz. Sunucu TV ile aynı bilgisayardaysa TV, gerçek yerel IP adreslerini de telefona bildirir; böylece bu ağlarda da ⚡ bağlantı kurulur.
 - Kısa bağlantı kopmalarında (2,5 sn'den kısa) oyun durmaz.
 - Gecikme hâlâ yüksekse: telefon ve bilgisayar aynı Wi‑Fi'de mi (misafir ağı değil), mümkünse 5 GHz ağ kullanın; telefonda pil tasarrufu modunu kapatın. Televizyonda **Oyun Modu**'nu açın: kapalıyken televizyonlar görüntüye 50–150 ms ekleyebilir (bu gecikme telefondaki sayıya yansımaz ama hissedilir).
-- Çizim motoru sabit görüntüleri önbelleğe alır; kare başına çizim süresi 1080p'de oyun başına 1–4 ms civarındadır. Ekran kare kaçırmaya başlarsa çözünürlük kendiliğinden düşürülür. Zayıf TV tarayıcıları için lobide **⚡ Performans modu** düğmesi vardır.
+- Çizim motoru sabit görüntüleri önbelleğe alır; kare başına çizim süresi 1080p'de oyun başına 1–4 ms civarındadır. Ekran kare kaçırmaya başlarsa çözünürlük yaklaşık bir saniye içinde kendiliğinden, gerekirse birkaç kademe düşürülür; yavaş çizen bir TV'de tuşlar da kare bitene kadar beklediği için bu, kumanda gecikmesini doğrudan azaltır. Skor ve puan yazıları önbellekten çizilir, aynı anda çalan ses sayısı sınırlıdır. Zayıf TV tarayıcıları için lobide **⚡ Performans modu** düğmesi vardır.
 
 ## Oyunlar
 

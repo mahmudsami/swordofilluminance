@@ -1004,8 +1004,11 @@ $('#fsBtn').addEventListener('click', () => {
 // ------------------------------------------------------------------ performans / kalite
 // level 0: en fazla 1920 px genişlik, 1: 1440, 2: 1120 (az efekt)
 const perf = { forced: store.get('kanepe.perf') === '1', level: 0 };
-const fps = { acc: 0, n: 0, warm: 0 };
-const CAPS = [1920, 1440, 1120];
+const fps = { acc: 0, n: 0, work: 0, warm: 0 };
+// çizim tuvalinin en büyük genişliği (kademe arttıkça daha az piksel)
+const CAPS = [1920, 1440, 1120, 880, 720];
+const FORCED_LEVEL = 2;
+const effLevel = () => Math.max(perf.level, perf.forced ? FORCED_LEVEL : 0);
 
 function updatePerfBtn() {
   const b = $('#perfBtn');
@@ -1019,27 +1022,32 @@ $('#perfBtn').addEventListener('click', () => {
   resize();
 });
 
-function adapt(dt) {
-  if (perf.forced || perf.level >= 2) return;
+// Kare hızı düşerse çözünürlüğü kademe kademe azalt. Yavaş ekranda tuş mesajları da kare bitene kadar
+// beklediği için bu, kumanda gecikmesini doğrudan düşürür. ~1 saniyelik pencereyle çabuk tepki verir;
+// yalnız aralık değil karenin iş süresine de bakar (30 Hz çalışan TV tarayıcısında boşuna düşürmesin).
+function adapt(dt, work) {
+  if (effLevel() >= CAPS.length - 1) return;
   if (fps.warm > 0) {
     fps.warm -= dt;
     fps.acc = 0;
     fps.n = 0;
+    fps.work = 0;
     return;
   }
   fps.acc += dt;
+  fps.work += work;
   fps.n++;
-  if (fps.n >= 120) {
-    const avg = fps.acc / fps.n;
-    fps.acc = 0;
-    fps.n = 0;
-    // ~45 FPS'in altına düşüyorsa çözünürlüğü azalt
-    if (avg > 0.022) {
-      perf.level++;
-      fps.warm = 2;
-      resize();
-    }
-  }
+  if (fps.acc < 1 || fps.n < 10) return;
+  const avg = fps.acc / fps.n;
+  const avgWork = fps.work / fps.n;
+  fps.acc = 0;
+  fps.n = 0;
+  fps.work = 0;
+  const slow = avg > 0.026 && (avgWork > 8 || avg > 0.036);
+  if (!slow) return;
+  perf.level = Math.min(CAPS.length - 1, effLevel() + (avg > 0.06 ? 2 : 1));
+  fps.warm = 1;
+  resize();
 }
 
 // ------------------------------------------------------------------ çizim döngüsü
@@ -1055,14 +1063,14 @@ function resize() {
   st.left = Math.floor((cw - w) / 2) + 'px';
   st.top = Math.floor((ch - h) / 2) + 'px';
   const dpr = window.devicePixelRatio || 1;
-  const cap = perf.forced ? CAPS[2] : CAPS[perf.level];
+  const cap = CAPS[effLevel()];
   const bw = Math.max(480, Math.min(Math.round(w * dpr), cap));
   if (canvas.width !== bw) {
     canvas.width = bw;
     canvas.height = Math.round((bw * H) / W);
   }
   RES.scale = canvas.width / W;
-  RES.low = perf.forced || perf.level >= 2;
+  RES.low = effLevel() >= 2;
   needDraw = true;
 }
 window.addEventListener('resize', resize);
@@ -1070,6 +1078,7 @@ window.addEventListener('resize', resize);
 let lastT = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
+  const t0 = performance.now();
   let dt = (now - lastT) / 1000;
   lastT = now;
   if (dt > 0 && dt < 0.5) frameAvg += (dt * 1000 - frameAvg) * 0.05;
@@ -1100,12 +1109,12 @@ function frame(now) {
     }
     if (goFlash > 0) goFlash -= dt;
     needDraw = true;
-    adapt(dt);
   }
   if (needDraw && game) {
     draw();
     needDraw = state === 'countdown' || state === 'playing';
   }
+  if (state === 'playing') adapt(dt, performance.now() - t0);
 }
 
 function draw() {

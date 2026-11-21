@@ -263,7 +263,11 @@ function updateNet() {
       row('Bağlantı', p2pOpen() ? '⚡ doğrudan' : '☁ sunucu üzerinden') +
       (lag.tvFrame ? row('TV kare süresi', `${lag.tvFrame} ms`) : '') +
       (rtt && lag.down - up > 40 ? '<p>TV → telefon yönündeki gecikme, telefonun Wi‑Fi güç tasarrufundan; kumandayı etkilemez.</p>' : '') +
-      (up > 40 ? '<p>Kumanda gecikmesi yüksek: bilgisayar Wi‑Fi’deyse kabloyla bağlayın ya da prize takın; telefonu modeme yaklaştırın, 5 GHz ağ kullanın.</p>' : '');
+      (lag.tvFrame > 30
+        ? `<p>TV ekranı yavaş çiziyor (${lag.tvFrame} ms/kare); tuşlar da kare bitene kadar bekliyor. TV’de lobideki ⚡ Performans modu’nu açın, tarayıcıda donanım hızlandırmanın açık olduğundan emin olun.</p>`
+        : up > 40
+          ? '<p>Kumanda gecikmesi yüksek: bilgisayar Wi‑Fi’deyse kabloyla bağlayın ya da prize takın; telefonu modeme yaklaştırın, 5 GHz ağ kullanın.</p>'
+          : '');
   }
 }
 

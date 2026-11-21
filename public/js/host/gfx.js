@@ -143,6 +143,52 @@ export function text(g, s, x, y, o = {}) {
   g.globalAlpha = a0;
 }
 
+// ------------------------------------------------------------------ önbellekli yazı
+// Sık çizilen yazılar (skor, etiket, açılan puanlar) bir kez görüntüye çizilir; sonraki karelerde
+// yalnızca kopyalanır. Yavaş TV tarayıcılarında fillText/strokeText karenin en pahalı işlerindendir.
+const TXT = new Map();
+let txtScale = 0;
+let measureCtx = null;
+if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) document.fonts.ready.then(() => TXT.clear());
+export function textImg(s, o = {}) {
+  if (txtScale !== RES.scale) {
+    TXT.clear();
+    txtScale = RES.scale;
+  }
+  const { size = 32, color = '#fff', weight = 700, stroke, sw = 6 } = o;
+  const key = `${s}|${Math.round(size)}|${color}|${weight}|${stroke || ''}|${sw}`;
+  let c = TXT.get(key);
+  if (c) {
+    TXT.delete(key); // en son kullanılan sona
+    TXT.set(key, c);
+    return c;
+  }
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+  measureCtx.font = `${weight} ${Math.round(size)}px ${FONT}`;
+  const pad = (stroke ? sw : 0) + 3;
+  const lw = Math.ceil(measureCtx.measureText(s).width + pad * 2);
+  const lh = Math.ceil(size * 1.4 + pad * 2);
+  c = makeCanvas(lw, lh, (g) => text(g, s, lw / 2, lh / 2, { size, color, weight, stroke, sw }));
+  c.pad = pad;
+  TXT.set(key, c);
+  if (TXT.size > 300) TXT.delete(TXT.keys().next().value);
+  return c;
+}
+// text() ile aynı yerleşim, ama önbellekten (alpha ve scale destekli)
+export function drawText(g, s, x, y, o = {}) {
+  const c = textImg(String(s), o);
+  const { align = 'center', alpha = 1, scale = 1 } = o;
+  const w = c.lw * scale;
+  const h = c.lh * scale;
+  const dx = align === 'left' ? x - c.pad * scale : align === 'right' ? x - w + c.pad * scale : x - w / 2;
+  if (alpha !== 1) {
+    const a0 = g.globalAlpha;
+    g.globalAlpha = a0 * alpha;
+    g.drawImage(c, dx, y - h / 2, w, h);
+    g.globalAlpha = a0;
+  } else g.drawImage(c, dx, y - h / 2, w, h);
+}
+
 const rgbCache = new Map();
 export function hexToRgb(hex) {
   let v = rgbCache.get(hex);
@@ -278,7 +324,7 @@ export class Popups {
     for (const p of this.list) {
       const t = 1 - p.life / p.max;
       const sc = t < 0.15 ? 0.6 + (t / 0.15) * 0.5 : 1.1 - Math.min(0.1, (t - 0.15) * 0.4);
-      text(g, p.s, p.x, p.y, { size: p.size * sc, color: p.color, stroke: 'rgba(0,0,0,.6)', sw: 7, weight: 800, alpha: Math.min(1, (p.life / p.max) * 3) });
+      drawText(g, p.s, p.x, p.y, { size: p.size, scale: sc, color: p.color, stroke: 'rgba(0,0,0,.6)', sw: 7, weight: 800, alpha: Math.min(1, (p.life / p.max) * 3) });
     }
   }
 }
@@ -314,8 +360,8 @@ export function banner(g, title, sub, color = '#fff', t = 1) {
   g.fillStyle = color;
   g.fillRect(0, H / 2 - 95, W, 5);
   g.fillRect(0, H / 2 + 90, W, 5);
-  text(g, title, W / 2, H / 2 - (sub ? 18 : 0), { size: title.length > 22 ? 64 : 84, color, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 8 });
-  if (sub) text(g, sub, W / 2, H / 2 + 50, { size: 32, color: '#e6e2ff', weight: 600 });
+  drawText(g, title, W / 2, H / 2 - (sub ? 18 : 0), { size: title.length > 22 ? 64 : 84, color, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 8 });
+  if (sub) drawText(g, sub, W / 2, H / 2 + 50, { size: 32, color: '#e6e2ff', weight: 600 });
   g.globalAlpha = a0;
 }
 
