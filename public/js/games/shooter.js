@@ -1,6 +1,6 @@
 // YILDIZ NÖBETİ — iki gemi omuz omuza: dalga dalga gelen uzaylıları durdurun, sonunda dev ana gemiyi indirin.
 // Takım oyunu: biri düşerse diğeri devam eder, kalp toplayan takım arkadaşını geri getirir.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, rand, pick, clamp } from '../host/gfx.js';
+import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, rand, pick, clamp, sprite, glow, Layer } from '../host/gfx.js';
 
 const SHIP_R = 9; // isabet yarıçapı (bağışlayıcı)
 const WAVES = [
@@ -11,12 +11,83 @@ const WAVES = [
 const ITEM_COL = { power: '#ffd23f', bomb: '#ff6a3d', life: '#ff4f7b', shield: '#2fc7ff' };
 const ITEM_TXT = { power: 'GÜÇ', bomb: 'SÜPER', life: 'CAN', shield: 'KALKAN' };
 
-function drawShip(g, x, y, color, t, alpha = 1, shield = false) {
+// ------------------------------------------------------------------ önceden çizilmiş görüntüler
+function alienSprite(type, frame) {
+  const S = 76;
+  return sprite(`alien|${type}|${frame}`, S, S, (g) => {
+    drawAlien(g, { type, x: S / 2, y: S / 2, seed: 0, flash: 0, hp: 1, max: 1 }, (frame / 4) * ((Math.PI * 2) / 10), true);
+  });
+}
+function turretSprite() {
+  return sprite('turret', 110, 76, (g) => drawAlien(g, { type: 'turret', x: 55, y: 34, seed: 0, flash: 0, hp: 1, max: 1 }, 0, true));
+}
+function shipSprite(color) {
+  return sprite(`ship|${color}`, 64, 64, (g) => drawShip(g, 32, 30, color, 0, 1, false, true));
+}
+function ebSprite(r) {
+  return sprite(`eb|${r}`, (r + 3) * 2, (r + 3) * 2, (g) => {
+    g.fillStyle = '#ff4f9a';
+    g.beginPath();
+    g.arc(r + 3, r + 3, r + 2, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = '#ffe0ef';
+    g.beginPath();
+    g.arc(r + 3, r + 3, Math.max(1, r - 2), 0, Math.PI * 2);
+    g.fill();
+  });
+}
+function itemSpriteS(type) {
+  return sprite(`sitem|${type}`, 60, 60, (g) => {
+    const c = ITEM_COL[type];
+    g.drawImage(glow(c, 30, 0.7), 0, 0, 60, 60);
+    g.fillStyle = shade(c, -0.5);
+    g.beginPath();
+    g.arc(30, 30, 18, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = c;
+    g.lineWidth = 3;
+    g.stroke();
+    text(g, { power: 'P', bomb: 'S', life: '♥', shield: 'K' }[type], 30, 32, { size: 22, color: c, weight: 800 });
+  });
+}
+function bossSprite() {
+  return sprite('boss', 340, 110, (g) => {
+    g.translate(170, 55);
+    g.fillStyle = '#2b2150';
+    g.beginPath();
+    g.moveTo(-160, -10);
+    g.lineTo(-60, -50);
+    g.lineTo(60, -50);
+    g.lineTo(160, -10);
+    g.lineTo(110, 40);
+    g.lineTo(-110, 40);
+    g.closePath();
+    g.fill();
+    g.fillStyle = '#5b3fbf';
+    g.beginPath();
+    g.moveTo(-120, -6);
+    g.lineTo(-50, -36);
+    g.lineTo(50, -36);
+    g.lineTo(120, -6);
+    g.lineTo(84, 28);
+    g.lineTo(-84, 28);
+    g.closePath();
+    g.fill();
+    g.fillStyle = '#ffd23f';
+    for (const sx of [-70, 70]) {
+      g.beginPath();
+      g.arc(sx, 24, 9, 0, Math.PI * 2);
+      g.fill();
+    }
+  });
+}
+
+function drawShip(g, x, y, color, t, alpha = 1, shield = false, noFlame = false) {
   g.save();
   g.translate(x, y);
   g.globalAlpha = alpha;
   // motor alevi
-  const fl = 12 + Math.sin(t * 40) * 4;
+  const fl = noFlame ? 0 : 12 + Math.sin(t * 40) * 4;
   g.fillStyle = '#ffb02e';
   g.beginPath();
   g.moveTo(-7, 18);
@@ -70,7 +141,7 @@ function drawShip(g, x, y, color, t, alpha = 1, shield = false) {
   g.restore();
 }
 
-function drawAlien(g, e, t) {
+function drawAlien(g, e, t, forSprite = false) {
   g.save();
   g.translate(e.x, e.y);
   g.scale(1.2, 1.2);
@@ -90,11 +161,12 @@ function drawAlien(g, e, t) {
     }
     g.fillStyle = '#2b2150';
     g.fillRect(-6, 18, 12, 12);
-    // can çubuğu
-    g.fillStyle = 'rgba(0,0,0,.5)';
-    g.fillRect(-30, -32, 60, 5);
-    g.fillStyle = '#46e38a';
-    g.fillRect(-30, -32, 60 * (e.hp / e.max), 5);
+    if (!forSprite) {
+      g.fillStyle = 'rgba(0,0,0,.5)';
+      g.fillRect(-30, -32, 60, 5);
+      g.fillStyle = '#46e38a';
+      g.fillRect(-30, -32, 60 * (e.hp / e.max), 5);
+    }
   } else {
     const col = e.type === 'dive' ? '#ff7a3d' : e.type === 'sine' ? '#46e38a' : '#c08bff';
     const s = e.type === 'dive' ? 1.15 : 1;
@@ -145,6 +217,18 @@ class ShooterGame {
     this.items = [];
     this.boss = null;
     this.flash = 0;
+    this.bg = new Layer(W, H, (g) => {
+      const bg = g.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, '#0b0626');
+      bg.addColorStop(1, '#170b33');
+      g.fillStyle = bg;
+      g.fillRect(0, 0, W, H);
+      const neb = g.createRadialGradient(W * 0.75, H * 0.3, 10, W * 0.75, H * 0.3, 420);
+      neb.addColorStop(0, 'rgba(180,92,255,.18)');
+      neb.addColorStop(1, 'rgba(180,92,255,0)');
+      g.fillStyle = neb;
+      g.fillRect(0, 0, W, H);
+    });
     this.wave = 0;
     this.startWave(0);
     this.sendInfo();
@@ -573,48 +657,21 @@ class ShooterGame {
 
   // ---------------------------------------------------------------- çizim
   drawBoss(g, b) {
-    g.save();
-    g.translate(b.x, b.y);
+    const spr = bossSprite();
     if (b.flash > 0) g.globalCompositeOperation = 'lighter';
-    g.fillStyle = '#2b2150';
-    g.beginPath();
-    g.moveTo(-160, -10);
-    g.lineTo(-60, -50);
-    g.lineTo(60, -50);
-    g.lineTo(160, -10);
-    g.lineTo(110, 40);
-    g.lineTo(-110, 40);
-    g.closePath();
-    g.fill();
-    g.fillStyle = '#5b3fbf';
-    g.beginPath();
-    g.moveTo(-120, -6);
-    g.lineTo(-50, -36);
-    g.lineTo(50, -36);
-    g.lineTo(120, -6);
-    g.lineTo(84, 28);
-    g.lineTo(-84, 28);
-    g.closePath();
-    g.fill();
+    g.drawImage(spr, b.x - 170, b.y - 55, spr.lw, spr.lh);
+    g.globalCompositeOperation = 'source-over';
     const pulse = 14 + Math.sin(this.time * 6) * 3;
-    g.shadowColor = '#ff4f7b';
-    g.shadowBlur = 30;
+    const gl = glow('#ff4f7b', 60, 0.8);
+    g.drawImage(gl, b.x - 60, b.y - 60, 120, 120);
     g.fillStyle = '#ff4f7b';
     g.beginPath();
-    g.arc(0, 0, pulse + 6, 0, Math.PI * 2);
+    g.arc(b.x, b.y, pulse + 6, 0, Math.PI * 2);
     g.fill();
-    g.shadowBlur = 0;
     g.fillStyle = '#fff';
     g.beginPath();
-    g.arc(0, 0, pulse * 0.45, 0, Math.PI * 2);
+    g.arc(b.x, b.y, pulse * 0.45, 0, Math.PI * 2);
     g.fill();
-    g.fillStyle = '#ffd23f';
-    for (const sx of [-70, 70]) {
-      g.beginPath();
-      g.arc(sx, 24, 9, 0, Math.PI * 2);
-      g.fill();
-    }
-    g.restore();
   }
 
   drawHud(g) {
@@ -657,46 +714,37 @@ class ShooterGame {
   }
 
   draw(g) {
-    const bg = g.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, '#0b0626');
-    bg.addColorStop(1, '#170b33');
-    g.fillStyle = bg;
-    g.fillRect(0, 0, W, H);
-    const neb = g.createRadialGradient(W * 0.75, H * 0.3, 10, W * 0.75, H * 0.3, 420);
-    neb.addColorStop(0, 'rgba(180,92,255,.18)');
-    neb.addColorStop(1, 'rgba(180,92,255,0)');
-    g.fillStyle = neb;
-    g.fillRect(0, 0, W, H);
-    for (const st of this.stars) {
-      g.fillStyle = `rgba(255,255,255,${0.25 + st.z * 0.6})`;
-      g.fillRect(st.x, st.y, st.z * 2.5, st.z * 2.5 + (st.z > 0.8 ? 3 : 0));
-    }
+    this.bg.draw(g);
+    g.fillStyle = 'rgba(255,255,255,.75)';
+    for (const st of this.stars) g.fillRect(st.x, st.y, st.z * 2.5, st.z * 2.5 + (st.z > 0.8 ? 3 : 0));
     g.save();
     this.shake.apply(g);
     for (const it of this.items) {
-      const c = ITEM_COL[it.type];
-      g.save();
-      g.shadowColor = c;
-      g.shadowBlur = 16;
-      g.fillStyle = shade(c, -0.5);
-      g.beginPath();
-      g.arc(it.x, it.y, 18, 0, Math.PI * 2);
-      g.fill();
-      g.restore();
-      g.strokeStyle = c;
-      g.lineWidth = 3;
-      g.beginPath();
-      g.arc(it.x, it.y, 18, 0, Math.PI * 2);
-      g.stroke();
-      text(g, { power: 'P', bomb: 'S', life: '♥', shield: 'K' }[it.type], it.x, it.y + 2, { size: 22, color: c, weight: 800 });
+      const spr = itemSpriteS(it.type);
+      g.drawImage(spr, it.x - 30, it.y - 30, 60, 60);
     }
     if (this.boss) this.drawBoss(g, this.boss);
-    for (const e of this.enemies) drawAlien(g, e, this.time);
-    for (const b of this.pb) {
-      g.fillStyle = b.p === 0 ? '#ffc2d2' : '#c2f0ff';
-      rr(g, b.x - 2.5, b.y - 9, 5, 18, 2.5);
-      g.fill();
+    const frame = Math.floor(this.time * 8) % 4;
+    for (const e of this.enemies) {
+      if (e.flash > 0) g.globalCompositeOperation = 'lighter';
+      if (e.type === 'turret') {
+        const spr = turretSprite();
+        g.drawImage(spr, e.x - 55, e.y - 34, spr.lw, spr.lh);
+        g.globalCompositeOperation = 'source-over';
+        g.fillStyle = 'rgba(0,0,0,.5)';
+        g.fillRect(e.x - 36, e.y - 40, 72, 6);
+        g.fillStyle = '#46e38a';
+        g.fillRect(e.x - 36, e.y - 40, 72 * (e.hp / e.max), 6);
+      } else {
+        const spr = alienSprite(e.type, (frame + (e.seed | 0)) % 4);
+        g.drawImage(spr, e.x - 38, e.y - 38, 76, 76);
+      }
+      g.globalCompositeOperation = 'source-over';
     }
+    g.fillStyle = '#ffd6e2';
+    for (const b of this.pb) if (b.p === 0) g.fillRect(b.x - 2.5, b.y - 9, 5, 18);
+    g.fillStyle = '#c2f0ff';
+    for (const b of this.pb) if (b.p === 1) g.fillRect(b.x - 2.5, b.y - 9, 5, 18);
     for (const s of this.ships) {
       if (!s.alive) continue;
       const blink = s.inv > 0 && Math.floor(this.time * 14) % 2;
@@ -704,18 +752,34 @@ class ShooterGame {
       g.translate(s.x, s.y);
       g.rotate(s.tilt * 0.18);
       g.scale(1.25, 1.25);
-      drawShip(g, 0, 0, PCOL[s.p], this.time, blink ? 0.35 : 1, s.shield > 0);
+      if (blink) g.globalAlpha = 0.35;
+      // motor alevi
+      const fl = 12 + Math.sin(this.time * 40) * 4;
+      g.fillStyle = '#ffb02e';
+      g.beginPath();
+      g.moveTo(-7, 18);
+      g.lineTo(0, 18 + fl);
+      g.lineTo(7, 18);
+      g.fill();
+      g.fillStyle = '#fff3b0';
+      g.beginPath();
+      g.moveTo(-3, 18);
+      g.lineTo(0, 18 + fl * 0.6);
+      g.lineTo(3, 18);
+      g.fill();
+      g.drawImage(shipSprite(PCOL[s.p]), -32, -30, 64, 64);
+      if (s.shield > 0) {
+        g.strokeStyle = `rgba(127,227,255,${0.55 + 0.25 * Math.sin(this.time * 12)})`;
+        g.lineWidth = 3;
+        g.beginPath();
+        g.arc(0, 0, 34, 0, Math.PI * 2);
+        g.stroke();
+      }
       g.restore();
     }
     for (const b of this.eb) {
-      g.fillStyle = '#ff4f9a';
-      g.beginPath();
-      g.arc(b.x, b.y, b.r + 2, 0, Math.PI * 2);
-      g.fill();
-      g.fillStyle = '#ffe0ef';
-      g.beginPath();
-      g.arc(b.x, b.y, b.r - 2, 0, Math.PI * 2);
-      g.fill();
+      const spr = ebSprite(b.r);
+      g.drawImage(spr, b.x - spr.lw / 2, b.y - spr.lh / 2, spr.lw, spr.lh);
     }
     this.parts.draw(g);
     g.restore();
@@ -738,6 +802,7 @@ export default {
   icon: '🚀',
   tag: 'Birlikte uzay savaşı',
   mode: 'coop',
+  cat: 'takim',
   color: '#7a5cff',
   desc: 'İki gemi yan yana! Üç dalga uzaylıyı geri püskürtün, sonunda dev ana gemiyi birlikte indirin. Biriniz düşerse diğeri kalp toplayıp onu geri getirebilir.',
   howto: ['Yön tuşları: uç (çapraz da olur)', 'A basılı tut: ateş', 'B: süper bomba — ekrandaki mermileri siler', 'P: güç · K: kalkan · S: süper · ♥: can / arkadaşını kurtar', '3 dalga + ana gemi'],

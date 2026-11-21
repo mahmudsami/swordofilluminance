@@ -18,13 +18,15 @@ body {
 
 #game {
   position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
+  left: 0;
+  top: 0;
   z-index: 1;
   background: #07061a;
   display: block;
 }
+body.ingame { background: #050414; }
+body.ingame .bg-blobs { display: none; }
+body.ingame #lobby, body.ingame #intro { display: none; }
 
 .pill {
   font-size: 1.15rem;
@@ -110,7 +112,19 @@ body {
 .lanhint { margin: 0; color: var(--muted); font-size: 1rem; line-height: 1.35; opacity: .85; }
 
 .gamesbox { min-height: 0; display: flex; flex-direction: column; }
-.gamesbox h2 { margin: 0 0 1.1rem; font-size: 2.2rem; display: flex; align-items: baseline; gap: 1rem; }
+.ghead { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0 0 1rem; flex-wrap: wrap; }
+.gamesbox h2 { margin: 0; font-size: 2.2rem; display: flex; align-items: baseline; gap: 1rem; }
+.tabs { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.tab { font-size: 1.05rem; font-weight: 700; color: var(--muted); background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 99px; padding: 0.35rem 0.95rem 0.25rem; }
+.tab i { font-style: normal; opacity: .6; margin-left: .15rem; }
+.tab:hover, .tab:focus-visible { color: var(--text); outline: none; background: rgba(255,255,255,.12); }
+.tab.on { color: #1a1238; background: var(--accent); border-color: transparent; }
+.gcard.hidden { display: none; }
+.pill.on { background: rgba(70, 227, 138, .18); border-color: var(--good); color: var(--good); }
+.netinfo { font-weight: 700; margin-left: .3rem; }
+.netinfo.good { color: var(--good); }
+.netinfo.mid { color: var(--accent); }
+.netinfo.slow { color: #ff8a8a; }
 .gamesbox h2 small { font-size: 1.15rem; color: var(--muted); font-weight: 600; }
 .ggrid {
   flex: 1; min-height: 0; overflow-y: auto;

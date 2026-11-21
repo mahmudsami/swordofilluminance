@@ -1,6 +1,6 @@
 // TURBO PİST — tepeden bakışlı araba yarışı. 3 tur, ilk bitiren kazanır.
 // Sarı oklu pedler hız verir, çimen yavaşlatır.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, clamp } from '../host/gfx.js';
+import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, clamp, sprite, Layer } from '../host/gfx.js';
 
 const LAPS = 3;
 const N = 600; // pist örnek noktası
@@ -171,10 +171,12 @@ class RacerGame {
   }
 
   renderTrack() {
-    const cv = document.createElement('canvas');
-    cv.width = W;
-    cv.height = H;
-    const g = cv.getContext('2d');
+    this.bg = new Layer(W, H, (g) => this.paintTrack(g));
+    // savrulma izleri: kalıcı, ayrı katman
+    this.skid = new Layer(W, H, () => {});
+  }
+
+  paintTrack(g) {
     const [g1, g2] = this.def.grass;
     g.fillStyle = g1;
     g.fillRect(0, 0, W, H);
@@ -286,10 +288,6 @@ class RacerGame {
       }
       g.restore();
     }
-    this.bg = cv;
-    this.skid = document.createElement('canvas');
-    this.skid.width = W;
-    this.skid.height = H;
   }
 
   updateCar(c, dt) {
@@ -342,7 +340,7 @@ class RacerGame {
 
     // savrulma izi
     if (Math.abs(vr) > 110 || (brake && vf > 200)) {
-      const sg = this.skid.getContext('2d');
+      const sg = this.skid.ctx();
       sg.fillStyle = 'rgba(20,20,30,.22)';
       for (const side of [-1, 1]) {
         sg.fillRect(c.x - nfx * 14 + -nfy * side * 10 - 2, c.y - nfy * 14 + nfx * side * 10 - 2, 4, 4);
@@ -353,7 +351,7 @@ class RacerGame {
         c.skidT = 0.2;
       }
     }
-    if (c.grass && Math.hypot(c.vx, c.vy) > 80 && Math.random() < 0.4) {
+    if (c.grass && Math.hypot(c.vx, c.vy) > 80 && Math.random() < dt * 24) {
       this.parts.burst(c.x - nfx * 18, c.y - nfy * 18, 1, ['#6b4a2a', '#4f8a3a'], { speed: 60, size: 5, life: 0.4, gravity: 0 });
     }
 
@@ -477,11 +475,28 @@ class RacerGame {
   draw(g) {
     g.save();
     this.shake.apply(g);
-    g.drawImage(this.bg, 0, 0);
-    g.drawImage(this.skid, 0, 0);
+    this.bg.draw(g);
+    this.skid.draw(g);
     this.parts.draw(g);
     for (const c of this.cars) {
-      drawCar(g, c.x, c.y, c.a, PCOL[c.p], 1.05, { boost: c.boost > 0 });
+      if (c.boost > 0) {
+        g.save();
+        g.translate(c.x, c.y);
+        g.rotate(c.a);
+        g.fillStyle = `rgba(255,${150 + Math.random() * 100},40,.9)`;
+        g.beginPath();
+        g.moveTo(-24, -5);
+        g.lineTo(-40 - Math.random() * 14, 0);
+        g.lineTo(-24, 5);
+        g.fill();
+        g.restore();
+      }
+      const spr = sprite(`car|${PCOL[c.p]}`, 56, 40, (sg) => drawCar(sg, 28, 20, 0, PCOL[c.p], 1.05));
+      g.save();
+      g.translate(c.x, c.y);
+      g.rotate(c.a);
+      g.drawImage(spr, -28, -20, 56, 40);
+      g.restore();
       if (c.wrong > 0.8 && !c.done) text(g, 'TERS YÖN!', c.x, c.y - 34, { size: 24, color: '#ffd23f', weight: 800, stroke: '#000', sw: 5 });
     }
     g.restore();
@@ -520,6 +535,7 @@ export default {
   icon: '🏎️',
   tag: 'Araba yarışı',
   mode: 'versus',
+  cat: 'spor',
   color: '#ff4f7b',
   desc: 'Tepeden bakışlı çılgın bir yarış! Virajlarda kaymayı kontrol et, sarı oklu pedlerden geçip turbo kap, rakibini piste sıkıştır. 3 turu ilk bitiren kazanır.',
   howto: ['◀ ▶ direksiyon', 'A: gaz', 'B: fren / geri', 'Sarı oklar turbo verir · çimen yavaşlatır', `${LAPS} tur — ilk bitiren kazanır`],

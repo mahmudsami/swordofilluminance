@@ -1,7 +1,7 @@
 // KANEPE — TV (host) uygulaması: lobi, oyun döngüsü, menüler ve telefon iletişimi
-import { W, H, PCOL, text, FONT } from './gfx.js';
+import { W, H, PCOL, text, FONT, RES, clearSprites } from './gfx.js';
 import * as sfx from './sfx.js';
-import GAMES from '../games/index.js';
+import GAMES, { CATEGORIES } from '../games/index.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -9,14 +9,27 @@ const sess = {
   get(k) { try { return JSON.parse(sessionStorage.getItem(k)); } catch { return null; } },
   set(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
 
 const canvas = $('#game');
-const g = canvas.getContext('2d');
-const STEP = 1 / 60;
+const g = canvas.getContext('2d', { alpha: false });
+const KEYS = ['up', 'down', 'left', 'right', 'a', 'b'];
+const KEYSET = new Set(KEYS);
+const BIT = { up: 1, down: 2, left: 4, right: 8, a: 16, b: 32 };
+const STATEFUL = new Set([...KEYS, 'st', 'stick', 'pad']);
+const RTC_CFG = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
+const GRACE_MS = 2500; // telefon koparsa oyunu durdurmadan önce bekle
 
 // ------------------------------------------------------------------ durum
-const players = [null, null]; // {name, kind: 'phone'|'kbd', connected, wins}
+const players = [null, null]; // {name, kind: 'phone'|'kbd', connected, wins, rtt, p2p}
 const inputs = [mkInput(), mkInput()];
+const phoneKeys = [mkKeys(), mkKeys()];
+const kbdKeys = [mkKeys(), mkKeys()];
+const lastSeq = [0, 0];
+const graceT = [null, null];
 const padOverride = [null, null];
 const padInfo = [null, null];
 let state = 'lobby'; // lobby | intro | countdown | playing | paused | results
@@ -31,18 +44,21 @@ let lastResult = null;
 let room = null;
 let joinBase = location.origin;
 let lastCount = 0;
+let needDraw = true;
+let catFilter = 'all';
+let userPaused = false; // kopma olduğunda oyun zaten kullanıcı tarafından durdurulmuş muydu
 
 function mkInput() {
   return { up: false, down: false, left: false, right: false, a: false, b: false, sx: 0, sy: 0, tx: 0.5, ty: 0.5, touch: false };
 }
-function resetInputs() {
-  for (let i = 0; i < 2; i++) Object.assign(inputs[i], mkInput());
+function mkKeys() {
+  return { up: false, down: false, left: false, right: false, a: false, b: false };
 }
 const both = () => !!(players[0] && players[1]);
 const pname = (p) => players[p]?.name || `Oyuncu ${p + 1}`;
 const isGame = () => state === 'countdown' || state === 'playing';
 
-// ------------------------------------------------------------------ ağ
+// ------------------------------------------------------------------ WebSocket
 let ws = null;
 let retry = 0;
 function connect() {
@@ -65,7 +81,92 @@ function connect() {
 function send(m) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(m));
 }
+// Telefona hızlı mesaj: doğrudan kanal açıksa onu kullan
+function sendPhone(p, m) {
+  const peer = peers[p];
+  if (peer && peer.dc && peer.dc.readyState === 'open') {
+    try {
+      peer.dc.send(JSON.stringify(m));
+      return;
+    } catch {}
+  }
+  send({ ...m, to: p });
+}
 
+// ------------------------------------------------------------------ WebRTC (telefon ↔ TV doğrudan)
+const peers = [null, null];
+
+function closePeer(p) {
+  const peer = peers[p];
+  peers[p] = null;
+  if (!peer) return;
+  try { peer.dc && peer.dc.close(); } catch {}
+  try { peer.pc.close(); } catch {}
+  if (players[p]) {
+    players[p].p2p = false;
+    updateSlotNet(p);
+  }
+}
+
+async function onRtc(p, m) {
+  if (p !== 0 && p !== 1 || !window.RTCPeerConnection) return;
+  if (m.sdp && m.sdp.type === 'offer') {
+    closePeer(p);
+    let pc;
+    try {
+      pc = new RTCPeerConnection(RTC_CFG);
+    } catch {
+      return;
+    }
+    const peer = { pc, dc: null, queue: [], remote: false };
+    peers[p] = peer;
+    pc.ondatachannel = (e) => {
+      const ch = e.channel;
+      peer.dc = ch;
+      ch.onopen = () => {
+        if (peers[p] !== peer) return;
+        if (players[p]) {
+          players[p].p2p = true;
+          updateSlotNet(p);
+        }
+      };
+      ch.onclose = () => {
+        if (peers[p] === peer) closePeer(p);
+      };
+      ch.onmessage = (ev) => {
+        if (peers[p] !== peer) return;
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+        onPhone(p, msg, true);
+      };
+    };
+    pc.onicecandidate = (e) => {
+      if (e.candidate && peers[p] === peer) send({ t: 'rtc', to: p, c: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate });
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed' && peers[p] === peer) closePeer(p);
+    };
+    try {
+      await pc.setRemoteDescription(m.sdp);
+      if (peers[p] !== peer) return;
+      peer.remote = true;
+      for (const c of peer.queue) pc.addIceCandidate(c).catch(() => {});
+      peer.queue = [];
+      const ans = await pc.createAnswer();
+      await pc.setLocalDescription(ans);
+      if (peers[p] === peer) send({ t: 'rtc', to: p, sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } });
+    } catch {
+      if (peers[p] === peer) closePeer(p);
+    }
+  } else if (m.c) {
+    const peer = peers[p];
+    if (!peer) return;
+    if (peer.remote) peer.pc.addIceCandidate(m.c).catch(() => {});
+    else peer.queue.push(m.c);
+  }
+}
+
+// ------------------------------------------------------------------ sunucu mesajları
 function onMsg(m) {
   switch (m.t) {
     case 'room': {
@@ -74,9 +175,13 @@ function onMsg(m) {
       sess.set('kanepe.room', room);
       m.players.forEach((s, i) => {
         if (s) {
-          const keep = same && players[i] && players[i].kind === 'phone' && players[i].name === s.name;
-          players[i] = { name: s.name, kind: 'phone', connected: s.connected, wins: keep ? players[i].wins : 0 };
-        } else if (players[i]?.kind === 'phone') players[i] = null;
+          const prev = players[i];
+          const keep = same && prev && prev.kind === 'phone' && prev.name === s.name;
+          players[i] = { name: s.name, kind: 'phone', connected: s.connected, wins: keep ? prev.wins : 0, rtt: keep ? prev.rtt : 0, p2p: !!peers[i] && keep && prev.p2p };
+        } else if (players[i]?.kind === 'phone') {
+          players[i] = null;
+          closePeer(i);
+        }
       });
       renderRoom();
       renderSlots();
@@ -86,39 +191,67 @@ function onMsg(m) {
     case 'pjoin': {
       const p = m.p;
       const prev = players[p];
-      if (prev && prev.kind === 'kbd') {
-        // klavye oyuncusu varsa öbür boş yere kaydır
-        if (!players[1 - p]) players[1 - p] = prev;
-      }
-      const keep = m.again && prev && prev.kind === 'phone';
-      players[p] = { name: m.name, kind: 'phone', connected: true, wins: keep ? prev.wins : 0 };
-      if (!m.again || !prev || prev.kind !== 'phone') {
+      clearTimeout(graceT[p]);
+      graceT[p] = null;
+      if (prev && prev.kind === 'kbd' && !players[1 - p]) players[1 - p] = prev; // klavye oyuncusunu öbür yere kaydır
+      const again = m.again && prev && prev.kind === 'phone';
+      players[p] = { name: m.name, kind: 'phone', connected: true, wins: again ? prev.wins : 0, rtt: again ? prev.rtt : 0, p2p: again ? prev.p2p : false };
+      lastSeq[p] = 0;
+      if (!again) {
+        closePeer(p);
         toast(`${m.name} katıldı!`, PCOL[p]);
         sfx.play('join');
         if (state !== 'lobby') ready[p] = false;
-      } else {
+      } else if (prev && !prev.connected) {
         toast(`${m.name} geri bağlandı`, PCOL[p]);
       }
-      renderSlots(true, p);
+      renderSlots(!again, p);
       if (state === 'intro') renderIntro();
-      if (state === 'paused' && pauseReason === 'disconnect' && allConnected()) resume();
-      pushViews();
+      if (state === 'paused' && pauseReason === 'disconnect' && allConnected()) {
+        if (userPaused) {
+          pauseReason = 'user';
+          showPauseModal();
+          pushViews();
+        } else resume();
+      }
+      // sadece bu telefona görünüm gönder (öbürünün kumandası bozulmasın)
+      sendView(p);
+      if (!again) sendView(1 - p);
       break;
     }
     case 'pleave': {
-      const s = players[m.p];
+      const p = m.p;
+      const s = players[p];
       if (!s) break;
       s.connected = false;
-      toast(`${s.name} bağlantısı koptu`, '#ff5a5a');
-      sfx.play('leave');
+      phoneKeys[p] = mkKeys();
+      inputs[p].sx = inputs[p].sy = 0;
+      inputs[p].touch = false;
+      for (const k of KEYS) applyKey(p, k);
       renderSlots();
-      if (isGame() || (state === 'paused' && pauseReason === 'user')) pause('disconnect');
-      else if (state === 'paused') showPauseModal();
       if (state === 'intro') renderIntro();
+      if (isGame()) {
+        // kısa kopmalarda oyunu durdurma; telefon genelde hemen geri gelir
+        clearTimeout(graceT[p]);
+        graceT[p] = setTimeout(() => {
+          graceT[p] = null;
+          if (players[p] && players[p].kind === 'phone' && !players[p].connected) {
+            toast(`${s.name} bağlantısı koptu`, '#ff5a5a');
+            sfx.play('leave');
+            if (isGame()) pause('disconnect');
+          }
+        }, GRACE_MS);
+      } else if (state === 'paused') {
+        if (pauseReason === 'user') userPaused = true;
+        pauseReason = 'disconnect';
+        showPauseModal();
+        pushViews();
+      }
       break;
     }
     case 'pgone': {
       const s = players[m.p];
+      closePeer(m.p);
       if (s && s.kind === 'phone') {
         players[m.p] = null;
         toast(`${s.name} ayrıldı`, '#ff5a5a');
@@ -130,7 +263,10 @@ function onMsg(m) {
       break;
     }
     case 'in':
-      onInput(m.p, m);
+      onPhone(m.p, m, false);
+      break;
+    case 'rtc':
+      onRtc(m.p, m);
       break;
   }
 }
@@ -139,7 +275,7 @@ const allConnected = () => [0, 1].every((i) => !players[i] || players[i].kind ==
 
 // ------------------------------------------------------------------ telefon görünümleri
 function gameCard(d) {
-  return { id: d.id, name: d.name, icon: d.icon, tag: d.tag, mode: d.mode, color: d.color };
+  return { id: d.id, name: d.name, icon: d.icon, tag: d.tag, mode: d.mode, color: d.color, cat: d.cat };
 }
 
 function viewFor(p) {
@@ -201,18 +337,62 @@ function pushViews() {
 }
 
 // ------------------------------------------------------------------ girişler
-function setKey(p, k, v) {
-  const s = inputs[p];
-  if (s[k] === v) return;
-  s[k] = v;
-  if (state === 'playing' && game && game.onKey) game.onKey(p, k, v);
+// Telefon ve klavye ayrı tutulur; oyuna ikisinin birleşimi gider.
+function applyKey(p, k) {
+  if (state !== 'playing') return;
+  const v = phoneKeys[p][k] || kbdKeys[p][k];
+  if (inputs[p][k] === v) return;
+  inputs[p][k] = v;
+  if (game && game.onKey) game.onKey(p, k, v);
+}
+function syncKeys() {
+  for (let p = 0; p < 2; p++) for (const k of KEYS) applyKey(p, k);
+}
+function releaseGameKeys() {
+  for (let p = 0; p < 2; p++) {
+    for (const k of KEYS) {
+      if (inputs[p][k]) {
+        inputs[p][k] = false;
+        if (game && game.onKey) game.onKey(p, k, false);
+      }
+    }
+  }
+}
+function resetInputs() {
+  for (let i = 0; i < 2; i++) Object.assign(inputs[i], mkInput());
 }
 
-function onInput(p, m) {
-  if (p !== 0 && p !== 1) return;
+function onPhone(p, m, viaP2P) {
+  if ((p !== 0 && p !== 1) || !players[p] || players[p].kind !== 'phone') return;
   const k = m.k;
-  if (k === 'up' || k === 'down' || k === 'left' || k === 'right' || k === 'a' || k === 'b') {
-    if (isGame()) setKey(p, k, !!m.d);
+  if (k === 'ping') {
+    sendPhone(p, { t: 'pong', ts: m.ts });
+    return;
+  }
+  // durum mesajlarında eski / sırası karışmış olanları at
+  if (STATEFUL.has(k) && m.n !== undefined) {
+    if (m.n <= lastSeq[p]) return;
+    lastSeq[p] = m.n;
+  }
+  if (KEYSET.has(k)) {
+    phoneKeys[p][k] = !!m.d;
+    applyKey(p, k);
+    return;
+  }
+  if (k === 'st') {
+    const b = m.b | 0;
+    for (const kk of KEYS) {
+      phoneKeys[p][kk] = !!(b & BIT[kk]);
+      applyKey(p, kk);
+    }
+    const pl = players[p];
+    const rtt = +m.r || 0;
+    const p2p = !!m.v || viaP2P;
+    if (Math.abs(rtt - (pl.rtt || 0)) > 4 || pl.p2p !== p2p) {
+      pl.rtt = rtt;
+      pl.p2p = p2p;
+      updateSlotNet(p);
+    }
     return;
   }
   if (k === 'stick') {
@@ -223,9 +403,13 @@ function onInput(p, m) {
   if (k === 'pad') {
     inputs[p].touch = !!m.d;
     if (m.d) {
-      inputs[p].tx = Math.max(0, Math.min(1, +m.x));
-      inputs[p].ty = Math.max(0, Math.min(1, +m.y));
+      inputs[p].tx = Math.max(0, Math.min(1, +m.x || 0));
+      inputs[p].ty = Math.max(0, Math.min(1, +m.y || 0));
     }
+    return;
+  }
+  if (k === 'choose') {
+    if (state === 'playing' && game && game.onChoose) game.onChoose(p, String(m.id));
     return;
   }
   if (k === 'pause') {
@@ -234,6 +418,7 @@ function onInput(p, m) {
   }
   if (k === 'pick') {
     if (state === 'lobby' || state === 'intro') selectGame(m.id);
+    else sendView(p);
     return;
   }
   if (k === 'ready') {
@@ -250,16 +435,15 @@ function onInput(p, m) {
     if (state === 'intro') toLobby();
     return;
   }
-  if (k === 'menu') {
-    menuAction(m.id);
-  }
+  if (k === 'menu') menuAction(m.id, p);
 }
 
-function menuAction(id) {
+function menuAction(id, p) {
   if (id === 'resume' && state === 'paused') resume();
   else if (id === 'restart' && (state === 'paused' || state === 'results')) startGame();
   else if (id === 'again' && state === 'results') startGame();
   else if (id === 'lobby') toLobby();
+  else if (p !== undefined) sendView(p); // geçersiz istek: telefonun görünümünü tazele
 }
 
 // Klavye
@@ -268,6 +452,7 @@ const KEYMAP = {
   ArrowUp: [1, 'up'], ArrowLeft: [1, 'left'], ArrowDown: [1, 'down'], ArrowRight: [1, 'right'],
   KeyK: [1, 'a'], KeyL: [1, 'b'], Numpad1: [1, 'a'], Numpad2: [1, 'b'], Period: [1, 'a'], Slash: [1, 'b'],
 };
+// Klavye oyuncuları sıra tabanlı oyunlarda seçimleri yön + A ile yapar; bunun için oyunlar onKey'i kullanır.
 
 window.addEventListener('keydown', (e) => {
   sfx.unlock();
@@ -275,7 +460,10 @@ window.addEventListener('keydown', (e) => {
   const map = KEYMAP[e.code];
   if (isGame() && map) {
     e.preventDefault();
-    if (!e.repeat) setKey(map[0], map[1], true);
+    if (!e.repeat) {
+      kbdKeys[map[0]][map[1]] = true;
+      applyKey(map[0], map[1]);
+    }
     return;
   }
   if (e.code === 'Escape' || e.code === 'KeyP') {
@@ -285,7 +473,10 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-    if (state === 'intro') { e.preventDefault(); tryStart(true); }
+    if (state === 'intro') {
+      e.preventDefault();
+      tryStart(true);
+    }
     return;
   }
   if (e.code.startsWith('Arrow') || ['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(e.code)) {
@@ -294,10 +485,16 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => {
   const map = KEYMAP[e.code];
-  if (map) setKey(map[0], map[1], false);
+  if (map) {
+    kbdKeys[map[0]][map[1]] = false;
+    applyKey(map[0], map[1]);
+  }
 });
 window.addEventListener('blur', () => {
-  for (const [p, k] of Object.values(KEYMAP)) setKey(p, k, false);
+  for (let p = 0; p < 2; p++) {
+    kbdKeys[p] = mkKeys();
+    for (const k of KEYS) applyKey(p, k);
+  }
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && isGame()) pause('user');
@@ -310,7 +507,7 @@ window.addEventListener('pointerdown', () => {
 // Menülerde yön tuşlarıyla gezinme
 function moveFocus(code) {
   let list;
-  if (state === 'lobby') list = [...document.querySelectorAll('#gameGrid .gcard')];
+  if (state === 'lobby') list = [...document.querySelectorAll('#gameGrid .gcard:not(.hidden)')];
   else if (!$('#modal').classList.contains('hidden')) list = [...document.querySelectorAll('#modalBtns button')];
   else if (state === 'intro') list = [...document.querySelectorAll('.introactions button')];
   if (!list || !list.length) return false;
@@ -322,6 +519,7 @@ function moveFocus(code) {
     i = Math.max(0, Math.min(list.length - 1, i + Math.sign(dir) * cols));
   } else i = (i + Math.sign(dir) + list.length) % list.length;
   list[i].focus();
+  list[i].scrollIntoView({ block: 'nearest' });
   sfx.play('click');
   return true;
 }
@@ -353,7 +551,7 @@ function makeApi(token) {
   return {
     W,
     H,
-    players: [0, 1].map((i) => ({ name: pname(i), color: PCOL[i] })),
+    players: [0, 1].map((i) => ({ name: pname(i), color: PCOL[i], kbd: players[i]?.kind === 'kbd' })),
     input: inputs,
     axis(p) {
       const s = inputs[p];
@@ -363,18 +561,21 @@ function makeApi(token) {
         x = (s.right ? 1 : 0) - (s.left ? 1 : 0);
         y = (s.down ? 1 : 0) - (s.up ? 1 : 0);
         const m = Math.hypot(x, y);
-        if (m > 1) { x /= m; y /= m; }
+        if (m > 1) {
+          x /= m;
+          y /= m;
+        }
       }
       return { x, y };
     },
     sfx: (n) => token === gameToken && sfx.play(n),
     buzz: (p, ms = 60) => {
-      if (token === gameToken && players[p]?.kind === 'phone') send({ t: 'buzz', to: p, ms });
+      if (token === gameToken && players[p]?.kind === 'phone') sendPhone(p, { t: 'buzz', ms });
     },
     info: (p, txt) => {
-      if (token !== gameToken) return;
+      if (token !== gameToken || padInfo[p] === txt) return;
       padInfo[p] = txt;
-      if (players[p]?.kind === 'phone' && isGame()) send({ t: 'info', to: p, text: txt });
+      if (players[p]?.kind === 'phone' && isGame()) sendPhone(p, { t: 'info', text: txt });
     },
     setPad: (p, patch) => {
       if (token !== gameToken) return;
@@ -394,43 +595,53 @@ function startGame() {
   padOverride[0] = padOverride[1] = null;
   padInfo[0] = padInfo[1] = null;
   gameToken++;
+  clearSprites();
+  resize();
   game = gameDef.create(makeApi(gameToken));
   state = 'countdown';
   countdown = 3;
   lastCount = 4;
   goFlash = 0;
+  fps.warm = 1.5;
   hideModal();
   showScreen('game');
   pushViews();
+  needDraw = true;
 }
 
 function pause(reason) {
-  if (!isGame() && !(state === 'paused' && reason === 'disconnect')) return;
+  if (!isGame()) return;
+  releaseGameKeys();
   state = 'paused';
   pauseReason = reason;
-  for (let i = 0; i < 2; i++) for (const k of ['up', 'down', 'left', 'right', 'a', 'b']) inputs[i][k] = false;
+  userPaused = reason === 'user';
   showPauseModal();
   pushViews();
+  needDraw = true;
 }
 
 function resume() {
   if (state !== 'paused' || !allConnected()) return;
   state = 'countdown';
-  countdown = 3;
-  lastCount = 4;
+  countdown = 2;
+  lastCount = 3;
   hideModal();
   pushViews();
+  needDraw = true;
 }
 
 function endGame(res) {
+  res = res || {};
+  releaseGameKeys();
   state = 'results';
-  lastResult = res || {};
+  lastResult = res;
   if (!res.coop && (res.winner === 0 || res.winner === 1) && players[res.winner]) players[res.winner].wins++;
   if (res.coop && res.win) [0, 1].forEach((i) => players[i] && players[i].wins++);
   sfx.play(res.coop && !res.win ? 'lose' : 'win');
   showResultsModal();
   renderSlots();
   pushViews();
+  needDraw = true;
 }
 
 function toLobby() {
@@ -438,17 +649,24 @@ function toLobby() {
   game = null;
   gameToken++;
   state = 'lobby';
+  for (let i = 0; i < 2; i++) {
+    clearTimeout(graceT[i]);
+    graceT[i] = null;
+  }
   hideModal();
   showScreen('lobby');
   renderSlots();
   pushViews();
-  setTimeout(() => $('#gameGrid .gcard')?.focus({ preventScroll: true }), 50);
+  clearSprites();
+  setTimeout(() => $('#gameGrid .gcard:not(.hidden)')?.focus({ preventScroll: true }), 50);
 }
 
 function showScreen(name) {
   $('#lobby').classList.toggle('hidden', name !== 'lobby');
   $('#intro').classList.toggle('hidden', name !== 'intro');
   canvas.classList.toggle('hidden', name !== 'game');
+  // oyun sırasında arka plan animasyonlarını durdur (performans)
+  document.body.classList.toggle('ingame', name === 'game');
   if (name === 'game') resize();
 }
 
@@ -459,6 +677,19 @@ function renderRoom() {
   const url = `${joinBase}/play?c=${room.code}`;
   $('#qr').src = `/qr.svg?d=${encodeURIComponent(url)}`;
   $('#joinUrl').textContent = joinBase.replace(/^https?:\/\//, '') + '/play';
+}
+
+function netLabel(s) {
+  if (s.kind === 'kbd') return '';
+  if (!s.connected) return '';
+  const ms = Math.round(s.rtt || 0);
+  const cls = ms > 150 ? 'slow' : ms > 70 ? 'mid' : 'good';
+  return `<span class="netinfo ${cls}" title="${s.p2p ? 'Telefon TV’ye doğrudan bağlı' : 'Sunucu üzerinden bağlı'}">${s.p2p ? '⚡ Doğrudan' : '☁ Sunucu'}${ms ? ` · ${ms} ms` : ''}</span>`;
+}
+
+function updateSlotNet(p) {
+  const el = document.querySelector(`.slot[data-p="${p}"] .netslot`);
+  if (el && players[p]) el.innerHTML = netLabel(players[p]);
 }
 
 function renderSlots(popIt = false, popP = -1) {
@@ -475,7 +706,7 @@ function renderSlots(popIt = false, popP = -1) {
     } else {
       const status = s.kind === 'kbd' ? (p === 0 ? 'Klavye · WASD + F/G' : 'Klavye · Oklar + K/L') : s.connected ? '📱 Bağlı' : '⚠ Bağlantı koptu';
       el.innerHTML = `<div class="av">${esc(s.name.charAt(0).toUpperCase())}</div>
-        <div class="who"><b>${esc(s.name)}</b><small>${status}</small></div>
+        <div class="who"><b>${esc(s.name)}</b><small>${status} <span class="netslot">${netLabel(s)}</span></small></div>
         <span class="wins" title="Kazanılan oyunlar">🏆 ${s.wins}</span>
         <button class="x" data-kick="${p}" title="Çıkar">✕</button>`;
     }
@@ -486,6 +717,10 @@ function renderSlots(popIt = false, popP = -1) {
       if (!players[p]) players[p] = { name: `Klavye ${p + 1}`, kind: 'kbd', connected: true, wins: 0 };
       sfx.play('join');
       renderSlots(true, p);
+      if (state === 'intro') {
+        ready[p] = true;
+        renderIntro();
+      }
       pushViews();
     })
   );
@@ -493,9 +728,29 @@ function renderSlots(popIt = false, popP = -1) {
     b.addEventListener('click', () => {
       const p = +b.dataset.kick;
       if (players[p]?.kind === 'phone') send({ t: 'kick', p });
+      closePeer(p);
       players[p] = null;
       renderSlots();
       pushViews();
+    })
+  );
+}
+
+const inCat = (d, c) => c === 'all' || d.cat === c || (c === 'takim' && d.mode === 'coop');
+
+function renderTabs() {
+  $('#tabs').innerHTML = CATEGORIES.map((c) => {
+    const n = GAMES.filter((d) => inCat(d, c.id)).length;
+    return n ? `<button class="tab ${c.id === catFilter ? 'on' : ''}" data-c="${c.id}">${esc(c.name)} <i>${n}</i></button>` : '';
+  }).join('');
+  document.querySelectorAll('#tabs .tab').forEach((b) =>
+    b.addEventListener('click', () => {
+      catFilter = b.dataset.c;
+      renderTabs();
+      document.querySelectorAll('#gameGrid .gcard').forEach((c) => {
+        const d = GAMES.find((x) => x.id === c.dataset.id);
+        c.classList.toggle('hidden', !inCat(d, catFilter));
+      });
     })
   );
 }
@@ -504,41 +759,65 @@ const previews = {};
 function renderGames() {
   const grid = $('#gameGrid');
   grid.innerHTML = GAMES.map(
-    (d) => `<button class="gcard" data-id="${d.id}" style="--c:${d.color}">
-      <span class="badge ${d.mode === 'coop' ? 'coop' : ''}">${d.mode === 'coop' ? 'TAKIM OYUNU' : 'KAFA KAFAYA'}</span>
-      <img class="prev" alt="" src="${previews[d.id] || ''}" />
+    (d) => `<button class="gcard ${inCat(d, catFilter) ? '' : 'hidden'}" data-id="${d.id}" style="--c:${d.color}">
+      <span class="badge ${d.mode === 'coop' ? 'coop' : ''}">${d.mode === 'coop' ? 'TAKIM' : 'KAPIŞMA'}</span>
+      <img class="prev" alt="" ${previews[d.id] ? `src="${previews[d.id]}"` : ''} />
       <div class="meta"><span class="gi">${d.icon}</span><div><b>${esc(d.name)}</b><small>${esc(d.tag)}</small></div></div>
     </button>`
   ).join('');
   grid.querySelectorAll('.gcard').forEach((b) => b.addEventListener('click', () => selectGame(b.dataset.id)));
+  renderTabs();
 }
 
+// Önizlemeleri lobiyi kilitlemeden, sırayla üret
 function makePreviews() {
   const c = document.createElement('canvas');
-  c.width = 640;
-  c.height = 360;
-  const cg = c.getContext('2d');
-  for (const d of GAMES) {
+  c.width = 480;
+  c.height = 270;
+  const cg = c.getContext('2d', { alpha: false });
+  const list = [...GAMES];
+  const saved = { scale: RES.scale, low: RES.low };
+  const next = () => {
+    const d = list.shift();
+    if (!d) {
+      RES.scale = saved.scale;
+      RES.low = saved.low;
+      clearSprites();
+      return;
+    }
+    if (game) {
+      // oyun başladıysa kalanları sonra üret
+      list.unshift(d);
+      setTimeout(next, 1500);
+      return;
+    }
     try {
+      RES.scale = 480 / W;
+      RES.low = false;
       const api = {
         W, H, players: [{ name: 'Ayşe', color: PCOL[0] }, { name: 'Can', color: PCOL[1] }], input: [mkInput(), mkInput()],
         axis: () => ({ x: 0, y: 0 }), sfx() {}, buzz() {}, info() {}, setPad() {}, end() {}, preview: true,
       };
       const inst = d.create(api);
       if (inst.demo) inst.demo();
-      cg.setTransform(0.5, 0, 0, 0.5, 0, 0);
-      cg.clearRect(0, 0, W, H);
+      cg.setTransform(RES.scale, 0, 0, RES.scale, 0, 0);
+      cg.fillStyle = '#000';
+      cg.fillRect(0, 0, W, H);
       inst.draw(cg);
       if (inst.destroy) inst.destroy();
-      previews[d.id] = c.toDataURL('image/jpeg', 0.85);
+      previews[d.id] = c.toDataURL('image/jpeg', 0.82);
+      const img = document.querySelector(`#gameGrid .gcard[data-id="${d.id}"] .prev`);
+      if (img) img.src = previews[d.id];
+      if (state === 'intro' && gameDef && gameDef.id === d.id) $('#introPrev').src = previews[d.id];
     } catch (err) {
       console.warn('önizleme hatası', d.id, err);
     }
-  }
-  document.querySelectorAll('#gameGrid .gcard').forEach((b) => {
-    const img = $('.prev', b);
-    if (previews[b.dataset.id]) img.src = previews[b.dataset.id];
-  });
+    RES.scale = saved.scale;
+    RES.low = saved.low;
+    clearSprites();
+    setTimeout(next, 16);
+  };
+  next();
 }
 
 function renderIntro() {
@@ -551,8 +830,9 @@ function renderIntro() {
   $('#introName').textContent = d.name;
   $('#introDesc').textContent = d.desc;
   $('#introHow').innerHTML = d.howto.map((h) => `<li>${esc(h)}</li>`).join('');
-  $('#introKeys').innerHTML = d.keys ? `Klavye: ${d.keys}` : '';
-  $('#introPrev').src = previews[d.id] || '';
+  $('#introKeys').innerHTML = d.keys ? `Klavye: ${esc(d.keys)}` : '';
+  if (previews[d.id]) $('#introPrev').src = previews[d.id];
+  else $('#introPrev').removeAttribute('src');
   $('#readyRow').innerHTML = [0, 1]
     .map((p) => {
       const s = players[p];
@@ -592,6 +872,13 @@ function hideModal() {
   $('#modal').classList.add('hidden');
 }
 
+function netSummary() {
+  return [0, 1]
+    .filter((p) => players[p] && players[p].kind === 'phone' && players[p].connected)
+    .map((p) => `${players[p].name}: ${players[p].p2p ? 'doğrudan' : 'sunucu'}${players[p].rtt ? ` ${Math.round(players[p].rtt)} ms` : ''}`)
+    .join(' · ');
+}
+
 function showPauseModal() {
   if (pauseReason === 'disconnect') {
     const gone = [0, 1].filter((i) => players[i] && players[i].kind === 'phone' && !players[i].connected).map(pname).join(', ');
@@ -604,6 +891,7 @@ function showPauseModal() {
       hint: 'Telefonda sayfayı yenilemek ya da kodu tekrar girmek yeterli.',
     });
   } else {
+    const net = netSummary();
     modal({
       icon: '⏸',
       title: 'Duraklatıldı',
@@ -613,7 +901,7 @@ function showPauseModal() {
         { label: '↻ Baştan başlat', on: startGame },
         { label: '⌂ Oyun listesi', on: toLobby },
       ],
-      hint: 'Esc: devam et',
+      hint: `Esc: devam et${net ? ` · Bağlantı: ${net}` : ''}`,
     });
   }
 }
@@ -681,75 +969,125 @@ $('#fsBtn').addEventListener('click', () => {
   } catch {}
 });
 
+// ------------------------------------------------------------------ performans / kalite
+// level 0: en fazla 1920 px genişlik, 1: 1440, 2: 1120 (az efekt)
+const perf = { forced: store.get('kanepe.perf') === '1', level: 0 };
+const fps = { acc: 0, n: 0, warm: 0 };
+const CAPS = [1920, 1440, 1120];
+
+function updatePerfBtn() {
+  const b = $('#perfBtn');
+  b.textContent = perf.forced ? '⚡ Performans modu: açık' : '⚡ Performans modu';
+  b.classList.toggle('on', perf.forced);
+}
+$('#perfBtn').addEventListener('click', () => {
+  perf.forced = !perf.forced;
+  store.set('kanepe.perf', perf.forced ? '1' : '0');
+  updatePerfBtn();
+  resize();
+});
+
+function adapt(dt) {
+  if (perf.forced || perf.level >= 2) return;
+  if (fps.warm > 0) {
+    fps.warm -= dt;
+    fps.acc = 0;
+    fps.n = 0;
+    return;
+  }
+  fps.acc += dt;
+  fps.n++;
+  if (fps.n >= 120) {
+    const avg = fps.acc / fps.n;
+    fps.acc = 0;
+    fps.n = 0;
+    // ~45 FPS'in altına düşüyorsa çözünürlüğü azalt
+    if (avg > 0.022) {
+      perf.level++;
+      fps.warm = 2;
+      resize();
+    }
+  }
+}
+
 // ------------------------------------------------------------------ çizim döngüsü
-let dpr = 1;
-let view = { s: 1, ox: 0, oy: 0 };
 function resize() {
-  dpr = Math.min(2, window.devicePixelRatio || 1);
   const cw = window.innerWidth;
   const ch = window.innerHeight;
-  canvas.width = Math.round(cw * dpr);
-  canvas.height = Math.round(ch * dpr);
   const s = Math.min(cw / W, ch / H);
-  view = { s, ox: (cw - W * s) / 2, oy: (ch - H * s) / 2 };
+  const w = Math.floor(W * s);
+  const h = Math.floor(H * s);
+  const st = canvas.style;
+  st.width = w + 'px';
+  st.height = h + 'px';
+  st.left = Math.floor((cw - w) / 2) + 'px';
+  st.top = Math.floor((ch - h) / 2) + 'px';
+  const dpr = window.devicePixelRatio || 1;
+  const cap = perf.forced ? CAPS[2] : CAPS[perf.level];
+  const bw = Math.max(480, Math.min(Math.round(w * dpr), cap));
+  if (canvas.width !== bw) {
+    canvas.width = bw;
+    canvas.height = Math.round((bw * H) / W);
+  }
+  RES.scale = canvas.width / W;
+  RES.low = perf.forced || perf.level >= 2;
+  needDraw = true;
 }
 window.addEventListener('resize', resize);
 
-let acc = 0;
 let lastT = performance.now();
 function frame(now) {
+  requestAnimationFrame(frame);
   let dt = (now - lastT) / 1000;
   lastT = now;
-  if (dt > 0.1) dt = 0.1;
-
-  if (game) {
-    if (state === 'countdown') {
-      countdown -= dt;
-      const c = Math.ceil(countdown);
-      if (c !== lastCount && c > 0) {
-        lastCount = c;
-        sfx.play('count');
-      }
-      if (countdown <= 0) {
-        state = 'playing';
-        goFlash = 0.8;
-        acc = 0;
-        sfx.play('go');
-        // geri sayım sırasında basılı tutulan tuşları oyuna bildir
-        if (game.onKey) for (let p = 0; p < 2; p++) for (const k of ['up', 'down', 'left', 'right', 'a', 'b']) if (inputs[p][k]) game.onKey(p, k, true);
-      }
-    } else if (state === 'playing') {
-      acc += dt;
-      let n = 0;
-      while (acc >= STEP && n < 6 && state === 'playing') {
-        game.update(STEP);
-        acc -= STEP;
-        n++;
-      }
-      if (n === 6) acc = 0;
-      if (goFlash > 0) goFlash -= dt;
+  if (dt > 0.25) dt = 0.25;
+  if (dt <= 0) return;
+  if (!game) return;
+  if (state === 'countdown') {
+    countdown -= dt;
+    const c = Math.ceil(countdown);
+    if (c !== lastCount && c > 0) {
+      lastCount = c;
+      sfx.play('count');
     }
-    draw();
+    if (countdown <= 0) {
+      state = 'playing';
+      goFlash = 0.8;
+      sfx.play('go');
+      syncKeys(); // geri sayımda basılı tutulan tuşları oyuna bildir
+    }
+    needDraw = true;
+  } else if (state === 'playing') {
+    // değişken adım: 50/60/120 Hz ekranlarda takılmasız hareket
+    let rem = Math.min(dt, 0.1);
+    while (rem > 0.0005 && state === 'playing') {
+      const st = rem > 0.02 ? 0.02 : rem;
+      game.update(st);
+      rem -= st;
+    }
+    if (goFlash > 0) goFlash -= dt;
+    needDraw = true;
+    adapt(dt);
   }
-  requestAnimationFrame(frame);
+  if (needDraw && game) {
+    draw();
+    needDraw = state === 'countdown' || state === 'playing';
+  }
 }
 
 function draw() {
-  g.setTransform(1, 0, 0, 1, 0, 0);
-  g.fillStyle = '#07061a';
-  g.fillRect(0, 0, canvas.width, canvas.height);
-  g.setTransform(view.s * dpr, 0, 0, view.s * dpr, view.ox * dpr, view.oy * dpr);
-  g.save();
-  g.beginPath();
-  g.rect(0, 0, W, H);
-  g.clip();
+  const s = RES.scale;
+  g.setTransform(s, 0, 0, s, 0, 0);
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
   try {
     game.draw(g);
   } catch (err) {
     console.error(err);
   }
-  g.restore();
-
+  g.setTransform(s, 0, 0, s, 0, 0);
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
   if (state === 'countdown') {
     const c = Math.max(1, Math.ceil(countdown));
     const f = countdown - Math.floor(countdown);
@@ -769,6 +1107,8 @@ async function boot() {
   renderGames();
   renderSlots();
   updateSoundBtn();
+  updatePerfBtn();
+  resize();
   try {
     const info = await (await fetch('/api/info')).json();
     const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
@@ -779,6 +1119,8 @@ async function boot() {
       $('#lanHint').textContent = 'Ağ adresi bulunamadı: bilgisayarın Wi-Fi’ye bağlı olduğundan emin ol.';
     } else if (location.protocol === 'http:' && /^(\d+\.){3}\d+$/.test(location.hostname)) {
       $('#lanHint').textContent = 'Telefonlar bu bilgisayarla aynı Wi-Fi ağına bağlı olmalı.';
+    } else {
+      $('#lanHint').textContent = 'İpucu: telefonlar TV ile aynı Wi-Fi’deyse doğrudan (⚡) bağlanır, gecikme en aza iner.';
     }
   } catch {}
   renderRoom();
@@ -788,7 +1130,7 @@ async function boot() {
     await document.fonts.load(`700 20px ${FONT}`);
     await document.fonts.load(`800 20px ${FONT}`);
   } catch {}
-  makePreviews();
-  setTimeout(() => $('#gameGrid .gcard')?.focus({ preventScroll: true }), 100);
+  setTimeout(makePreviews, 50);
+  setTimeout(() => $('#gameGrid .gcard:not(.hidden)')?.focus({ preventScroll: true }), 100);
 }
 boot();

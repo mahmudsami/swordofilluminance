@@ -1,6 +1,6 @@
 // IŞIK İZİ — iki neon yılan arkasında kalıcı iz bırakır. Duvara ya da bir ize çarpan kaybeder.
-// B ile kısa süre hızlan. 5 rauntta 3 alan kazanır.
-import { W, H, PCOL, text, rr, Particles, Shake, banner, winDots, rgba } from '../host/gfx.js';
+// A ile kısa süre hızlan. 5 rauntta 3 alan kazanır.
+import { W, H, PCOL, text, rr, Particles, Shake, banner, winDots, rgba, Layer, glow } from '../host/gfx.js';
 
 const CELL = 20;
 const COLS = 64;
@@ -17,41 +17,87 @@ class SnakeGame {
     this.time = 0;
     this.parts = new Particles();
     this.shake = new Shake();
+    this.grid0 = new Layer(W, H, (g) => this.paintGrid(g));
+    this.trail = new Layer(COLS * CELL, ROWS * CELL, (g) => this.paintTrail(g));
     this.newRound();
   }
 
   newRound() {
     this.round++;
     this.grid = new Int8Array(COLS * ROWS).fill(-1);
-    this.trail = document.createElement('canvas');
-    this.trail.width = COLS * CELL;
-    this.trail.height = ROWS * CELL;
-    this.tick = 0.075;
     this.elapsed = 0;
+    this.tick = 0.075;
     const my = Math.floor(ROWS / 2);
     this.snakes = [
-      { p: 0, x: 8, y: my, dir: [1, 0], queue: [], acc: 0, alive: true, boost: 0, energy: 1, len: 0 },
-      { p: 1, x: COLS - 9, y: my, dir: [-1, 0], queue: [], acc: 0, alive: true, boost: 0, energy: 1, len: 0 },
+      { p: 0, x: 8, y: my, dir: [1, 0], queue: [], acc: 0, alive: true, boost: 0, energy: 1, path: [] },
+      { p: 1, x: COLS - 9, y: my, dir: [-1, 0], queue: [], acc: 0, alive: true, boost: 0, energy: 1, path: [] },
     ];
-    for (const s of this.snakes) this.paint(s, s.x, s.y);
+    this.trail.invalidate();
+    for (const s of this.snakes) this.mark(s);
     this.phase = this.round === 1 ? 'play' : 'intro';
     this.phaseT = 2;
     this.roundWinner = null;
     for (const p of [0, 1]) this.api.info(p, `Raunt ${this.round} · ${this.wins[0]} - ${this.wins[1]}`);
   }
 
-  paint(s, x, y) {
-    this.grid[y * COLS + x] = s.p;
-    s.len++;
-    const g = this.trail.getContext('2d');
-    g.shadowColor = PCOL[s.p];
-    g.shadowBlur = 10;
-    g.fillStyle = PCOL[s.p];
+  // hücreyi işaretle ve iz katmanına sadece yeni parçayı çiz
+  mark(s) {
+    this.grid[s.y * COLS + s.x] = s.p;
+    s.path.push([s.x, s.y]);
+    if (this.trail.cv && !this.trail.dirty) {
+      const g = this.trail.ctx();
+      g.save();
+      g.shadowColor = PCOL[s.p];
+      g.shadowBlur = 8;
+      this.paintSeg(g, s.p, s.path.length - 1, s.path);
+      g.restore();
+    }
+  }
+
+  paintSeg(g, p, i, path) {
+    const [x, y] = path[i];
+    g.fillStyle = PCOL[p];
     g.fillRect(x * CELL + 3, y * CELL + 3, CELL - 6, CELL - 6);
-    // önceki hücreyle birleştir
-    const [dx, dy] = s.dir;
-    g.shadowBlur = 0;
-    if (s.len > 1) g.fillRect(Math.min(x, x - dx) * CELL + 3 + (dx ? CELL / 2 : 0), Math.min(y, y - dy) * CELL + 3 + (dy ? CELL / 2 : 0), dx ? CELL : CELL - 6, dy ? CELL : CELL - 6);
+    if (i > 0) {
+      const [px, py] = path[i - 1];
+      const dx = x - px;
+      const dy = y - py;
+      g.fillRect(Math.min(x, px) * CELL + 3 + (dx ? CELL / 2 : 0), Math.min(y, py) * CELL + 3 + (dy ? CELL / 2 : 0), dx ? CELL : CELL - 6, dy ? CELL : CELL - 6);
+    }
+  }
+
+  paintTrail(g) {
+    for (const s of this.snakes || []) {
+      g.save();
+      g.shadowColor = PCOL[s.p];
+      g.shadowBlur = 8;
+      for (let i = 0; i < s.path.length; i++) this.paintSeg(g, s.p, i, s.path);
+      g.restore();
+    }
+  }
+
+  paintGrid(g) {
+    g.fillStyle = '#07071a';
+    g.fillRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(120,110,255,.08)';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let x = 0; x <= COLS; x += 2) {
+      g.moveTo(x * CELL + 0.5, OY);
+      g.lineTo(x * CELL + 0.5, OY + ROWS * CELL);
+    }
+    for (let y = 0; y <= ROWS; y += 2) {
+      g.moveTo(0, OY + y * CELL + 0.5);
+      g.lineTo(W, OY + y * CELL + 0.5);
+    }
+    g.stroke();
+    g.strokeStyle = 'rgba(160,150,255,.5)';
+    g.lineWidth = 3;
+    g.strokeRect(1.5, OY + 1.5, COLS * CELL - 3, ROWS * CELL - 3);
+    for (const p of [0, 1]) {
+      const left = p === 0;
+      text(g, this.api.players[p].name, left ? 20 : W - 20, 30, { size: 32, color: PCOL[p], weight: 800, align: left ? 'left' : 'right' });
+    }
   }
 
   onKey(p, k, down) {
@@ -63,6 +109,7 @@ class SnakeGame {
         s.boost = 1.1;
         s.energy = 0;
         this.api.sfx('nitro');
+        this.api.buzz(p, 30);
       }
       return;
     }
@@ -124,13 +171,11 @@ class SnakeGame {
         this.step(s);
       }
       const dead = new Set();
-      for (const s of movers) {
-        if (s.x < 0 || s.y < 0 || s.x >= COLS || s.y >= ROWS || this.grid[s.y * COLS + s.x] !== -1) dead.add(s);
-      }
+      for (const s of movers) if (s.x < 0 || s.y < 0 || s.x >= COLS || s.y >= ROWS || this.grid[s.y * COLS + s.x] !== -1) dead.add(s);
       if (movers.length === 2 && movers[0].x === movers[1].x && movers[0].y === movers[1].y) movers.forEach((s) => dead.add(s));
       for (const s of movers) {
         if (dead.has(s)) this.crash(s);
-        else this.paint(s, s.x, s.y);
+        else this.mark(s);
       }
       if (dead.size) break;
     }
@@ -149,44 +194,24 @@ class SnakeGame {
         if (i === 10) s.dir = s.p ? [0, 1] : [0, -1];
         if (i === 18) s.dir = s.p ? [-1, 0] : [1, 0];
         this.step(s);
-        this.paint(s, s.x, s.y);
+        this.mark(s);
       }
     }
   }
 
   draw(g) {
-    g.fillStyle = '#07071a';
-    g.fillRect(0, 0, W, H);
+    this.grid0.draw(g);
     g.save();
     this.shake.apply(g);
-    // ızgara
-    g.strokeStyle = 'rgba(120,110,255,.08)';
-    g.lineWidth = 1;
-    g.beginPath();
-    for (let x = 0; x <= COLS; x += 2) {
-      g.moveTo(x * CELL + 0.5, OY);
-      g.lineTo(x * CELL + 0.5, OY + ROWS * CELL);
-    }
-    for (let y = 0; y <= ROWS; y += 2) {
-      g.moveTo(0, OY + y * CELL + 0.5);
-      g.lineTo(W, OY + y * CELL + 0.5);
-    }
-    g.stroke();
-    g.strokeStyle = 'rgba(160,150,255,.5)';
-    g.lineWidth = 3;
-    g.strokeRect(1.5, OY + 1.5, COLS * CELL - 3, ROWS * CELL - 3);
-    g.drawImage(this.trail, 0, OY);
+    this.trail.draw(g, 0, OY);
     for (const s of this.snakes) {
       if (!s.alive) continue;
       const px = s.x * CELL;
       const py = OY + s.y * CELL;
-      g.save();
-      g.shadowColor = '#fff';
-      g.shadowBlur = 18;
+      g.drawImage(glow('#ffffff', 26, 0.6), px + CELL / 2 - 26, py + CELL / 2 - 26, 52, 52);
       g.fillStyle = '#fff';
       rr(g, px + 1, py + 1, CELL - 2, CELL - 2, 6);
       g.fill();
-      g.restore();
       if (s.boost > 0) {
         g.strokeStyle = rgba(PCOL[s.p], 0.8);
         g.lineWidth = 3;
@@ -198,20 +223,16 @@ class SnakeGame {
     this.parts.draw(g);
     g.restore();
 
-    // üst bilgi
     for (const p of [0, 1]) {
       const s = this.snakes[p];
       const left = p === 0;
-      const x = left ? 20 : W - 20;
-      text(g, this.api.players[p].name, x, 30, { size: 32, color: PCOL[p], weight: 800, align: left ? 'left' : 'right' });
       winDots(g, left ? 250 : W - 250, 30, this.wins[p], NEED, PCOL[p], left ? 'left' : 'right');
-      // turbo enerjisi
       const bx = left ? 360 : W - 360 - 120;
-      rr(g, bx, 22, 120, 16, 8);
       g.fillStyle = 'rgba(255,255,255,.1)';
+      rr(g, bx, 22, 120, 16, 8);
       g.fill();
-      rr(g, bx, 22, 120 * s.energy, 16, 8);
       g.fillStyle = s.energy >= 1 ? PCOL[p] : rgba(PCOL[p], 0.5);
+      rr(g, bx, 22, Math.max(16, 120 * s.energy), 16, 8);
       g.fill();
       text(g, 'TURBO', bx + 60, 30, { size: 12, color: '#fff', weight: 800 });
     }
@@ -232,9 +253,10 @@ export default {
   icon: '⚡',
   tag: 'Neon yılan düellosu',
   mode: 'versus',
+  cat: 'aksiyon',
   color: '#b45cff',
   desc: 'Arkanda kalıcı bir ışık izi bırakarak ilerliyorsun. Rakibini sıkıştır, duvara ya da bir ize çarpan kaybeder. Turbo ile kısa süre hızlan!',
-  howto: ['Yön tuşları: dön', 'A / B: turbo (dolunca tekrar kullanılır)', 'Duvar ve izler ölümcül', '5 rauntta 3 alan kazanır'],
+  howto: ['Yön tuşları: dön', 'A: turbo (dolunca tekrar kullanılır)', 'Duvar ve izler ölümcül', '5 rauntta 3 alan kazanır'],
   keys: '1. oyuncu WASD + F · 2. oyuncu Oklar + K',
   controller: { layout: 'dpad', dirs: 4, a: 'TURBO', b: null },
   create: (api) => new SnakeGame(api),

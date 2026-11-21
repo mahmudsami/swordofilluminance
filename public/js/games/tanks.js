@@ -1,6 +1,6 @@
 // TANK TABURU — iki oyuncu birlikte üssü korur, düşman tank dalgalarını durdurur.
 // 3 bölüm. Üs vurulursa ya da iki oyuncunun da canı biterse oyun biter.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, rand, pick } from '../host/gfx.js';
+import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, rand, pick, Layer, sprite } from '../host/gfx.js';
 
 const N = 26; // hücre sayısı (13x13 karo, her karo 2x2 hücre)
 const CS = 26; // hücre boyutu px
@@ -250,6 +250,9 @@ class TanksGame {
     this.pops = new Popups();
     this.shake = new Shake();
     this.stage = 0;
+    this.terrain = new Layer(MAP, MAP, (g) => this.paintTerrain(g));
+    this.bushLayer = new Layer(MAP, MAP, (g) => this.paintBushes(g));
+    this.panelLayer = new Layer(W, H, (g) => this.paintPanels(g));
     this.players = [0, 1].map((p) => ({
       p, lives: 3, level: 0, kills: 0, score: 0, alive: false, x: 0, y: 0, dir: 0, sub: 0,
       shield: 0, frozen: 0, spawnT: 0, respawnT: 0, cool: 0, tread: 0, last: 'v', out: false,
@@ -292,6 +295,11 @@ class TanksGame {
       pl.bullets = 0;
       if (pl.lives > 0 || pl.alive) this.spawnPlayer(pl);
     }
+    this.water = [];
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (this.cells[y * N + x] === WATER) this.water.push([x, y]);
+    this.terrain.invalidate();
+    this.bushLayer.invalidate();
+    this.panelLayer.invalidate();
     this.sendInfo();
   }
 
@@ -300,11 +308,14 @@ class TanksGame {
     return this.cells[y * N + x];
   }
   set(x, y, v) {
+    if (this.cells[y * N + x] === v) return;
     this.cells[y * N + x] = v;
+    this.patchCell(x, y);
   }
 
   sendInfo() {
     for (const pl of this.players) this.api.info(pl.p, `Bölüm ${this.stage + 1} · ♥ ${pl.lives} · ★ ${pl.level}`);
+    if (this.panelLayer) this.panelLayer.invalidate();
   }
 
   spawnPlayer(pl) {
@@ -369,6 +380,34 @@ class TanksGame {
     }
     if (moved) t.tread = (t.tread + dist * 0.5) % 48;
     return true;
+  }
+
+  // Hafif hizasızken engele takılan oyuncu tankını en yakın açık koridora kaydırır
+  assist(t, dist) {
+    const [dx, dy] = DV[t.dir];
+    const axis = dx ? 'y' : 'x';
+    const v = t[axis];
+    const base = Math.floor(v / CS) * CS;
+    const cands = [base, base + CS, base - CS, base + 2 * CS]
+      .filter((c) => c !== v && Math.abs(c - v) <= CS && c >= 0 && c <= MAP - TS)
+      .sort((a, b) => Math.abs(a - v) - Math.abs(b - v));
+    for (const c of cands) {
+      const tx = axis === 'x' ? c : t.x;
+      const ty = axis === 'y' ? c : t.y;
+      if (this.tankBlocked(t, tx, ty) || this.tankBlocked(t, tx + dx * 2, ty + dy * 2)) continue;
+      const sgn = Math.sign(c - v);
+      const n = Math.min(Math.abs(c - v), Math.max(1, Math.round(dist)));
+      for (let i = 0; i < n; i++) {
+        const nx = axis === 'x' ? t.x + sgn : t.x;
+        const ny = axis === 'y' ? t.y + sgn : t.y;
+        if (this.tankBlocked(t, nx, ny)) return false;
+        t.x = nx;
+        t.y = ny;
+      }
+      t.tread = (t.tread + dist * 0.5) % 48;
+      return true;
+    }
+    return false;
   }
 
   turn(t, dir) {
@@ -631,7 +670,8 @@ class TanksGame {
   spawnEnemy() {
     if (!this.queue.length) return;
     const alive = this.enemies.filter((e) => !e.dead).length;
-    if (alive >= MAX_ON_FIELD - (this.stage === 0 ? 1 : 0)) return;
+    // ilk bölüm alıştırma gibi: sahada daha az düşman
+    if (alive >= MAX_ON_FIELD - (this.stage === 0 ? 2 : 0)) return;
     for (let k = 0; k < 3; k++) {
       const [x, y] = ESPAWN[(this.spawnIdx + k) % 3];
       const probe = { x, y };
@@ -675,7 +715,7 @@ class TanksGame {
     const res = this.moveTank(e, e.speed * dt);
     e.turnT -= dt;
     if (res !== true) {
-      if (Math.random() < 0.06) this.turn(e, this.pickDir(e));
+      if (Math.random() < dt * 4) this.turn(e, this.pickDir(e));
       e.fireT -= dt * 2;
     } else if (e.turnT <= 0) {
       this.turn(e, this.pickDir(e));
@@ -683,7 +723,7 @@ class TanksGame {
     }
     e.fireT -= dt;
     if (e.fireT <= 0) {
-      e.fireT = rand(0.9, 2.2);
+      e.fireT = this.stage === 0 ? rand(1.3, 2.8) : rand(0.9, 2.2);
       if (!this.bullets.some((b) => b.owner === e)) this.fire(e, false);
     }
   }
@@ -722,7 +762,9 @@ class TanksGame {
     else if (v) dir = v > 0 ? 2 : 0;
     if (dir >= 0) {
       this.turn(pl, dir);
-      this.moveTank(pl, 150 * dt);
+      const res = this.moveTank(pl, 150 * dt);
+      // duvarın kenarına takıldıysa koridora doğru kaydır
+      if (res !== true) this.assist(pl, 150 * dt);
     }
     const maxB = pl.level >= 2 ? 2 : 1;
     if ((s.a || s.b) && pl.cool <= 0 && pl.bullets < maxB) {
@@ -813,97 +855,131 @@ class TanksGame {
   }
 
   // ---------------------------------------------------------------- çizim
-  drawCells(g, layer) {
+  paintFloorCell(g, x, y) {
+    const px = x * CS;
+    const py = y * CS;
+    g.fillStyle = '#1b1a2c';
+    g.fillRect(px, py, CS, CS);
+    g.fillStyle = 'rgba(255,255,255,.03)';
+    if (x % 2 === 0) g.fillRect(px, py, 1, CS);
+    if (y % 2 === 0) g.fillRect(px, py, CS, 1);
+  }
+
+  paintCell(g, x, y, v) {
+    const px = x * CS;
+    const py = y * CS;
+    if (v === BRICK) {
+      g.fillStyle = '#6e2c17';
+      g.fillRect(px, py, CS, CS);
+      g.fillStyle = '#c4613a';
+      g.fillRect(px + 1, py + 1, 11, 11);
+      g.fillRect(px + 14, py + 1, 11, 11);
+      g.fillRect(px + 1, py + 14, 5, 11);
+      g.fillRect(px + 8, py + 14, 11, 11);
+      g.fillRect(px + 21, py + 14, 4, 11);
+      g.fillStyle = 'rgba(255,255,255,.18)';
+      g.fillRect(px + 1, py + 1, 11, 2);
+      g.fillRect(px + 14, py + 1, 11, 2);
+      g.fillRect(px + 8, py + 14, 11, 2);
+    } else if (v === STEEL) {
+      g.fillStyle = '#8b90ad';
+      g.fillRect(px, py, CS, CS);
+      g.fillStyle = '#c9cde6';
+      g.fillRect(px + 3, py + 3, CS - 6, CS - 6);
+      g.fillStyle = '#a5aac8';
+      g.fillRect(px + 7, py + 7, CS - 14, CS - 14);
+    } else if (v === WATER) {
+      g.fillStyle = '#1f5fbf';
+      g.fillRect(px, py, CS, CS);
+    }
+  }
+
+  paintTerrain(g) {
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
-        const v = this.cells[y * N + x];
-        const px = X0 + x * CS;
-        const py = Y0 + y * CS;
-        if (layer === 0) {
-          if (v === BRICK) {
-            g.fillStyle = '#6e2c17';
-            g.fillRect(px, py, CS, CS);
-            g.fillStyle = '#c4613a';
-            g.fillRect(px + 1, py + 1, 11, 11);
-            g.fillRect(px + 14, py + 1, 11, 11);
-            g.fillRect(px + 1, py + 14, 5, 11);
-            g.fillRect(px + 8, py + 14, 11, 11);
-            g.fillRect(px + 21, py + 14, 4, 11);
-            g.fillStyle = 'rgba(255,255,255,.18)';
-            g.fillRect(px + 1, py + 1, 11, 2);
-            g.fillRect(px + 14, py + 1, 11, 2);
-            g.fillRect(px + 8, py + 14, 11, 2);
-          } else if (v === STEEL) {
-            g.fillStyle = '#8b90ad';
-            g.fillRect(px, py, CS, CS);
-            g.fillStyle = '#c9cde6';
-            g.fillRect(px + 3, py + 3, CS - 6, CS - 6);
-            g.fillStyle = '#a5aac8';
-            g.fillRect(px + 7, py + 7, CS - 14, CS - 14);
-          } else if (v === WATER) {
-            g.fillStyle = '#1f5fbf';
-            g.fillRect(px, py, CS, CS);
-            g.strokeStyle = 'rgba(160,220,255,.55)';
-            g.lineWidth = 2;
-            g.beginPath();
-            const ph = this.time * 3 + x * 0.7;
-            for (let k = 0; k < 2; k++) {
-              const wy = py + 8 + k * 11;
-              g.moveTo(px + 2, wy + Math.sin(ph + k) * 2);
-              g.quadraticCurveTo(px + CS / 2, wy - 4 + Math.sin(ph + k) * 2, px + CS - 2, wy + Math.sin(ph + k) * 2);
-            }
-            g.stroke();
-          }
-        } else if (v === BUSH) {
-          g.fillStyle = '#2f8f3f';
-          g.beginPath();
-          for (const [ox, oy, r] of [[7, 8, 8], [18, 7, 8], [8, 18, 8], [19, 19, 8], [13, 13, 7]]) {
-            g.moveTo(px + ox + r, py + oy);
-            g.arc(px + ox, py + oy, r, 0, Math.PI * 2);
-          }
-          g.fill();
-          g.fillStyle = '#4fc25e';
-          g.beginPath();
-          for (const [ox, oy, r] of [[7, 6, 4], [18, 5, 4], [9, 16, 4], [19, 17, 4]]) {
-            g.moveTo(px + ox + r, py + oy);
-            g.arc(px + ox, py + oy, r, 0, Math.PI * 2);
-          }
-          g.fill();
-        }
+        this.paintFloorCell(g, x, y);
+        this.paintCell(g, x, y, this.cells[y * N + x]);
       }
     }
   }
 
-  drawPanel(g, p) {
+  // tek hücre değişince katmanı baştan çizmek yerine sadece o hücreyi yenile
+  patchCell(x, y) {
+    if (!this.terrain || this.terrain.dirty || !this.terrain.cv) return;
+    const g = this.terrain.ctx();
+    g.save();
+    g.beginPath();
+    g.rect(x * CS, y * CS, CS, CS);
+    g.clip();
+    g.clearRect(x * CS, y * CS, CS, CS);
+    this.paintFloorCell(g, x, y);
+    this.paintCell(g, x, y, this.cells[y * N + x]);
+    g.restore();
+  }
+
+  paintBushes(g) {
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        if (this.cells[y * N + x] !== BUSH) continue;
+        const px = x * CS;
+        const py = y * CS;
+        g.fillStyle = '#2f8f3f';
+        g.beginPath();
+        for (const [ox, oy, r] of [[7, 8, 8], [18, 7, 8], [8, 18, 8], [19, 19, 8], [13, 13, 7]]) {
+          g.moveTo(px + ox + r, py + oy);
+          g.arc(px + ox, py + oy, r, 0, Math.PI * 2);
+        }
+        g.fill();
+        g.fillStyle = '#4fc25e';
+        g.beginPath();
+        for (const [ox, oy, r] of [[7, 6, 4], [18, 5, 4], [9, 16, 4], [19, 17, 4]]) {
+          g.moveTo(px + ox + r, py + oy);
+          g.arc(px + ox, py + oy, r, 0, Math.PI * 2);
+        }
+        g.fill();
+      }
+    }
+  }
+
+  // paneller: oyuncu durumu değişince yeniden çizilir (her karede değil)
+  paintPanels(g) {
+    g.fillStyle = '#0d0c1c';
+    g.fillRect(0, 0, W, H);
+    for (const p of [0, 1]) {
+      const pl = this.players[p];
+      const cx = p === 0 ? X0 / 2 : W - X0 / 2;
+      const col = PCOL[p];
+      rr(g, cx - 130, 22, 260, 676, 22);
+      g.fillStyle = rgba(col, 0.09);
+      g.fill();
+      g.strokeStyle = rgba(col, 0.4);
+      g.lineWidth = 2;
+      g.stroke();
+      text(g, this.api.players[p].name, cx, 66, { size: 34, color: col, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 6 });
+      drawTank(g, cx, 150, 0, pl.out ? '#555' : col, 92, 0, { star: pl.level });
+      text(g, 'CAN', cx, 236, { size: 18, color: '#a7a2d1' });
+      for (let i = 0; i < Math.min(5, Math.max(pl.lives, 0)); i++) drawPowerIcon(g, 'life', cx - (Math.min(pl.lives, 5) - 1) * 20 + i * 40, 272, 32);
+      if (pl.lives <= 0) text(g, 'BİTTİ', cx, 272, { size: 26, color: '#ff6b7a', weight: 800 });
+      text(g, 'GÜÇ', cx, 320, { size: 18, color: '#a7a2d1' });
+      for (let i = 0; i < 3; i++) drawStar(g, cx - 40 + i * 40, 352, 15, i < pl.level ? '#ffd23f' : 'rgba(255,255,255,.12)');
+      text(g, 'VURDUĞU', cx, 400, { size: 18, color: '#a7a2d1' });
+      text(g, 'PUAN', cx, 478, { size: 18, color: '#a7a2d1' });
+      if (p === 0) {
+        text(g, 'BÖLÜM', cx, 580, { size: 18, color: '#a7a2d1' });
+        text(g, `${this.stage + 1} / ${STAGES.length}`, cx, 616, { size: 44, color: '#ffd23f', weight: 800 });
+        text(g, 'ÜS', cx - 62, 668, { size: 20, color: '#a7a2d1', weight: 800 });
+      } else text(g, 'KALAN DÜŞMAN', cx, 560, { size: 18, color: '#a7a2d1' });
+    }
+  }
+
+  drawPanelDyn(g, p) {
     const pl = this.players[p];
     const cx = p === 0 ? X0 / 2 : W - X0 / 2;
-    const col = PCOL[p];
-    rr(g, cx - 130, 22, 260, 676, 22);
-    g.fillStyle = rgba(col, 0.09);
-    g.fill();
-    g.strokeStyle = rgba(col, 0.4);
-    g.lineWidth = 2;
-    g.stroke();
-    text(g, this.api.players[p].name, cx, 66, { size: 34, color: col, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 6 });
-    drawTank(g, cx, 150, 0, pl.out ? '#555' : col, 92, 0, { star: pl.level });
-    // canlar
-    text(g, 'CAN', cx, 236, { size: 18, color: '#a7a2d1' });
-    for (let i = 0; i < Math.max(pl.lives, 0); i++) drawPowerIcon(g, 'life', cx - (Math.min(pl.lives, 5) - 1) * 20 + i * 40, 272, 32);
-    if (pl.lives <= 0) text(g, 'BİTTİ', cx, 272, { size: 26, color: '#ff6b7a', weight: 800 });
-    text(g, 'GÜÇ', cx, 320, { size: 18, color: '#a7a2d1' });
-    for (let i = 0; i < 3; i++) drawStar(g, cx - 40 + i * 40, 352, 15, i < pl.level ? '#ffd23f' : 'rgba(255,255,255,.12)');
-    text(g, 'VURDUĞU', cx, 400, { size: 18, color: '#a7a2d1' });
     text(g, String(pl.kills), cx, 436, { size: 40, color: '#fff', weight: 800 });
-    text(g, 'PUAN', cx, 478, { size: 18, color: '#a7a2d1' });
     text(g, String(pl.score), cx, 508, { size: 28, color: '#fff', weight: 800 });
-
     if (p === 0) {
-      text(g, 'BÖLÜM', cx, 580, { size: 18, color: '#a7a2d1' });
-      text(g, `${this.stage + 1} / ${STAGES.length}`, cx, 616, { size: 44, color: '#ffd23f', weight: 800 });
-      text(g, 'ÜS', cx - 62, 668, { size: 20, color: '#a7a2d1', weight: 800 });
       for (let i = 0; i < 3; i++) {
-        const on = i < this.baseHp;
-        g.fillStyle = on ? '#7fe3ff' : 'rgba(255,255,255,.12)';
+        g.fillStyle = i < this.baseHp ? '#7fe3ff' : 'rgba(255,255,255,.12)';
         g.beginPath();
         const dx = cx - 18 + i * 36;
         g.moveTo(dx, 654);
@@ -914,38 +990,38 @@ class TanksGame {
         g.fill();
       }
     } else {
-      text(g, 'KALAN DÜŞMAN', cx, 560, { size: 18, color: '#a7a2d1' });
       const left = ENEMY_PER_STAGE - this.killed;
       for (let i = 0; i < ENEMY_PER_STAGE; i++) {
         const ix = cx - 90 + (i % 9) * 22.5;
         const iy = 592 + Math.floor(i / 9) * 30;
         g.fillStyle = i < left ? '#b8bdd6' : 'rgba(255,255,255,.08)';
-        rr(g, ix - 7, iy - 9, 14, 18, 3);
-        g.fill();
+        g.fillRect(ix - 7, iy - 9, 14, 18);
       }
       if (this.clockT > 0) text(g, `ZAMAN DURDU ${Math.ceil(this.clockT)}`, cx, 670, { size: 22, color: '#c08bff', weight: 800 });
     }
   }
 
   draw(g) {
-    g.fillStyle = '#0d0c1c';
-    g.fillRect(0, 0, W, H);
+    this.panelLayer.draw(g);
     g.save();
     this.shake.apply(g);
-    // zemin
-    g.fillStyle = '#1b1a2c';
-    g.fillRect(X0, Y0, MAP, MAP);
-    g.strokeStyle = 'rgba(255,255,255,.03)';
-    g.lineWidth = 1;
-    g.beginPath();
-    for (let i = 0; i <= 13; i++) {
-      g.moveTo(X0 + i * TS + 0.5, Y0);
-      g.lineTo(X0 + i * TS + 0.5, Y0 + MAP);
-      g.moveTo(X0, Y0 + i * TS + 0.5);
-      g.lineTo(X0 + MAP, Y0 + i * TS + 0.5);
+    this.terrain.draw(g, X0, Y0);
+    // su dalgaları (tek yol, tek çizim)
+    if (this.water.length) {
+      g.strokeStyle = 'rgba(160,220,255,.5)';
+      g.lineWidth = 2;
+      g.beginPath();
+      for (const [x, y] of this.water) {
+        const px = X0 + x * CS;
+        const py = Y0 + y * CS;
+        const w = Math.sin(this.time * 3 + x * 0.7) * 2;
+        g.moveTo(px + 2, py + 9 + w);
+        g.quadraticCurveTo(px + CS / 2, py + 5 + w, px + CS - 2, py + 9 + w);
+        g.moveTo(px + 2, py + 20 - w);
+        g.quadraticCurveTo(px + CS / 2, py + 16 - w, px + CS - 2, py + 20 - w);
+      }
+      g.stroke();
     }
-    g.stroke();
-    this.drawCells(g, 0);
     drawCore(g, X0 + 13 * CS, Y0 + 25 * CS - 4, this.baseAlive, this.time);
     if (this.baseFlash > 0) {
       g.fillStyle = `rgba(255,80,90,${this.baseFlash * 0.7})`;
@@ -956,19 +1032,17 @@ class TanksGame {
       for (const [x, y] of SHELL) g.fillRect(X0 + x * CS, Y0 + y * CS, CS, CS);
     }
 
-    // güçlendirmeler
     for (const pw of this.powerups) {
       if (pw.t < 4 && Math.floor(this.time * 8) % 2) continue;
-      drawPowerIcon(g, pw.type, X0 + pw.x + TS / 2, Y0 + pw.y + TS / 2, TS - 4);
+      const spr = sprite(`tpow|${pw.type}`, TS, TS, (sg) => drawPowerIcon(sg, pw.type, TS / 2, TS / 2, TS - 4));
+      g.drawImage(spr, X0 + pw.x, Y0 + pw.y, TS, TS);
     }
 
-    // tanklar
     for (const e of this.enemies) {
       const cx = X0 + e.x + TS / 2;
       const cy = Y0 + e.y + TS / 2;
       if (e.spawnT > 0) {
-        const s = 10 + Math.abs(Math.sin(e.spawnT * 12)) * 16;
-        drawStar(g, cx, cy, s, '#fff3b0');
+        drawStar(g, cx, cy, 10 + Math.abs(Math.sin(e.spawnT * 12)) * 16, '#fff3b0');
         continue;
       }
       let col = ETYPES[e.type].color;
@@ -994,19 +1068,17 @@ class TanksGame {
         g.stroke();
       }
     }
-    // mermiler
     for (const b of this.bullets) {
       g.fillStyle = b.player ? '#fff3b0' : '#ffb3b3';
-      g.beginPath();
-      g.arc(X0 + b.x, Y0 + b.y, b.power ? 5 : 4, 0, Math.PI * 2);
-      g.fill();
+      const r = b.power ? 5 : 4;
+      g.fillRect(X0 + b.x - r, Y0 + b.y - r, r * 2, r * 2);
     }
-    this.drawCells(g, 1);
+    this.bushLayer.draw(g, X0, Y0);
     this.parts.draw(g);
     g.restore();
     this.pops.draw(g);
-    this.drawPanel(g, 0);
-    this.drawPanel(g, 1);
+    this.drawPanelDyn(g, 0);
+    this.drawPanelDyn(g, 1);
 
     if (this.phase === 'intro') banner(g, `BÖLÜM ${this.stage + 1}`, 'Üssü birlikte koruyun!', '#ffd23f', 2.5 - this.phaseT);
     if (this.phase === 'clear') banner(g, 'BÖLÜM TEMİZ!', `Sıradaki: Bölüm ${this.stage + 2}`, '#46e38a', 3.2 - this.phaseT);
@@ -1021,6 +1093,7 @@ export default {
   icon: '🛡️',
   tag: 'Birlikte savunma',
   mode: 'coop',
+  cat: 'takim',
   color: '#46a35e',
   desc: 'İkiniz aynı taraftasınız! Alttaki parlayan kristal üssü koruyun, gelen düşman tank dalgalarını durdurun. Yanıp sönen tankı vurursanız güçlendirme düşer.',
   howto: ['Yön tuşları: sür', 'A: ateş (basılı tutabilirsin)', 'Arkadaşını vurursan 2 saniye donar!', 'Yıldız: güçlenen mermi · Kalkan · Kale: çelik duvar', 'Bomba: ekrandaki düşmanlar · Saat: düşmanları dondurur', 'Üs 3 vuruşa dayanır · her bölümde 18 tank · 3 bölüm'],

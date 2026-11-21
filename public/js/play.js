@@ -1,6 +1,16 @@
 // KANEPE — telefon kumandası
+// Girdiler mümkünse TV'ye doğrudan (WebRTC veri kanalı), değilse sunucu üzerinden (WebSocket) gider.
 const $ = (s, r = document) => r.querySelector(s);
 const PLAYER_COLORS = ['#ff4f7b', '#2fc7ff'];
+const BIT = { up: 1, down: 2, left: 4, right: 8, a: 16, b: 32 };
+const RTC_CFG = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
+const CATS = [
+  ['all', 'Tümü'],
+  ['takim', 'Takım'],
+  ['spor', 'Spor & Yarış'],
+  ['aksiyon', 'Aksiyon'],
+  ['bulmaca', 'Bulmaca & Masa'],
+];
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -22,21 +32,49 @@ let ws = null;
 let retry = 0;
 let wantJoin = null; // {code, name}
 let slot = -1;
-let current = null; // aktif görünüm verisi
+let hostHere = false;
+let current = null; // aktif görünüm
+let curSig = '';
 let cleanupView = null;
+let releasePad = null;
+let seq = 0;
+let keys = 0; // basılı tuşların bit maskesi
+let rtt = 0;
+let catFilter = 'all';
 
 const vibrate = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch {} };
-const send = (m) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-// ---------------------------------------------------------------- bağlantı
+function wsSend(m) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(m));
+}
+function p2pOpen() {
+  return !!(dc && dc.readyState === 'open');
+}
+// Hız gerektiren her şey: önce doğrudan kanal
+function sendFast(m) {
+  if (p2pOpen()) {
+    try {
+      dc.send(JSON.stringify(m));
+      return;
+    } catch {}
+  }
+  wsSend(m);
+}
+// Sıralı kumanda mesajı (TV eski / sırası karışmış mesajları atar)
+function sendIn(m) {
+  m.t = 'in';
+  m.n = ++seq;
+  sendFast(m);
+}
+
+// ---------------------------------------------------------------- WebSocket
 function connect() {
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
-  ws = new WebSocket(url);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.onopen = () => {
     retry = 0;
-    setNet(true);
-    if (wantJoin) send({ t: 'join', code: wantJoin.code, name: wantJoin.name, id: myId });
+    updateNet();
+    if (wantJoin) wsSend({ t: 'join', code: wantJoin.code, name: wantJoin.name, id: myId });
   };
   ws.onmessage = (e) => {
     let m;
@@ -44,20 +82,158 @@ function connect() {
     handle(m);
   };
   ws.onclose = () => {
-    setNet(false);
-    if (wantJoin && slot >= 0) showOverlay('Bağlantı koptu, yeniden bağlanılıyor…');
+    updateNet();
+    if (wantJoin && slot >= 0 && !p2pOpen()) showOverlay('Bağlantı koptu, yeniden bağlanılıyor…');
     setTimeout(connect, Math.min(4000, 300 * 2 ** retry++));
   };
 }
 
-function setNet(ok) {
-  $('#net').classList.toggle('bad', !ok);
+// ---------------------------------------------------------------- WebRTC (doğrudan bağlantı)
+let pc = null;
+let dc = null;
+let rtcPending = [];
+let rtcRemote = false;
+let rtcTries = 0;
+let rtcTimer = null;
+let rtcRetryTimer = null;
+
+function rtcStop() {
+  clearTimeout(rtcTimer);
+  const oldPc = pc;
+  const oldDc = dc;
+  pc = null;
+  dc = null;
+  try { oldDc && oldDc.close(); } catch {}
+  try { oldPc && oldPc.close(); } catch {}
+  updateNet();
 }
 
+function rtcRetry() {
+  clearTimeout(rtcRetryTimer);
+  if (rtcTries >= 4 || slot < 0 || !hostHere) return;
+  rtcRetryTimer = setTimeout(rtcStart, 1500 * 2 ** rtcTries);
+}
+
+function rtcStart() {
+  clearTimeout(rtcRetryTimer);
+  rtcStop();
+  if (!window.RTCPeerConnection || slot < 0 || !hostHere) return;
+  rtcTries++;
+  let myPc;
+  try {
+    myPc = pc = new RTCPeerConnection(RTC_CFG);
+  } catch {
+    return;
+  }
+  const ch = (dc = myPc.createDataChannel('kanepe', { ordered: true }));
+  rtcPending = [];
+  rtcRemote = false;
+  ch.onopen = () => {
+    if (dc !== ch) return;
+    clearTimeout(rtcTimer);
+    rtcTries = 0;
+    updateNet();
+    ping();
+    sendState();
+    hideOverlay();
+  };
+  ch.onclose = () => {
+    if (dc !== ch) return;
+    rtcStop();
+    rtcRetry();
+  };
+  ch.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    handle(m);
+  };
+  myPc.onicecandidate = (e) => {
+    if (e.candidate && pc === myPc) wsSend({ t: 'rtc', c: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate });
+  };
+  myPc.onconnectionstatechange = () => {
+    if (pc !== myPc) return;
+    if (myPc.connectionState === 'failed') {
+      rtcStop();
+      rtcRetry();
+    }
+  };
+  myPc
+    .createOffer()
+    .then((o) => myPc.setLocalDescription(o))
+    .then(() => {
+      if (pc === myPc) wsSend({ t: 'rtc', sdp: { type: myPc.localDescription.type, sdp: myPc.localDescription.sdp } });
+    })
+    .catch(() => {});
+  rtcTimer = setTimeout(() => {
+    if (pc === myPc && !p2pOpen()) {
+      rtcStop();
+      rtcRetry();
+    }
+  }, 9000);
+}
+
+function onRtc(m) {
+  if (!pc) return;
+  const myPc = pc;
+  if (m.sdp && m.sdp.type === 'answer') {
+    myPc
+      .setRemoteDescription(m.sdp)
+      .then(() => {
+        if (pc !== myPc) return;
+        rtcRemote = true;
+        for (const c of rtcPending) myPc.addIceCandidate(c).catch(() => {});
+        rtcPending = [];
+      })
+      .catch(() => {});
+  } else if (m.c) {
+    if (rtcRemote) myPc.addIceCandidate(m.c).catch(() => {});
+    else rtcPending.push(m.c);
+  }
+}
+
+// ---------------------------------------------------------------- ağ durumu & gecikme
+let pingSent = 0;
+function ping() {
+  if (slot < 0) return;
+  pingSent = performance.now();
+  sendFast({ t: 'in', k: 'ping', ts: Math.round(pingSent * 10) / 10 });
+}
+function sendState() {
+  if (slot < 0) return;
+  sendIn({ k: 'st', b: keys, r: Math.round(rtt), v: p2pOpen() ? 1 : 0 });
+}
+
+function updateNet() {
+  const net = $('#net');
+  const ok = (ws && ws.readyState === 1) || p2pOpen();
+  net.classList.toggle('bad', !ok);
+  const lat = $('#lat');
+  if (!ok || slot < 0) {
+    lat.textContent = '';
+    lat.className = 'lat';
+    return;
+  }
+  const ms = Math.round(rtt);
+  lat.textContent = `${p2pOpen() ? '⚡' : '☁'} ${ms ? ms + ' ms' : '…'}`;
+  lat.className = 'lat ' + (ms > 150 ? 'slow' : ms > 70 ? 'mid' : 'good');
+  lat.title = p2pOpen() ? 'TV ile doğrudan bağlantı' : 'Sunucu üzerinden bağlantı';
+}
+
+// Kumanda açıkken sık durum gönder: hem takılı tuşları düzeltir hem Wi-Fi'yi uyanık tutar
+setInterval(() => {
+  if (slot >= 0 && current && current.mode === 'pad') sendState();
+}, 150);
+setInterval(() => {
+  ping();
+  updateNet();
+}, 2000);
+
+// ---------------------------------------------------------------- mesajlar
 function handle(m) {
   switch (m.t) {
     case 'joined': {
       slot = m.slot;
+      hostHere = !!m.host;
       sess.set('kanepe.code', m.code);
       store.set('kanepe.name', m.name);
       document.body.style.setProperty('--me', PLAYER_COLORS[slot] || PLAYER_COLORS[0]);
@@ -67,18 +243,23 @@ function handle(m) {
       $('#join').classList.add('hidden');
       $('#main').classList.remove('hidden');
       $('#joinBtn').disabled = false;
-      if (m.host) hideOverlay(); else showOverlay('TV ekranı bekleniyor…');
+      if (hostHere) hideOverlay();
+      else showOverlay('TV ekranı bekleniyor…');
       if (!current) render({ mode: 'wait', title: 'Bağlandın!', text: 'TV ekranına bak.' });
       vibrate(30);
       keepAwake();
+      if (!p2pOpen()) {
+        rtcTries = 0;
+        setTimeout(rtcStart, 250);
+      }
+      ping();
+      updateNet();
       break;
     }
     case 'error':
       $('#joinBtn').disabled = false;
-      if (slot >= 0) {
-        // Oda kapanmış olabilir: katılma ekranına dön
-        leaveToJoin(m.msg);
-      } else {
+      if (slot >= 0) leaveToJoin(m.msg);
+      else {
         $('#joinErr').textContent = m.msg;
         wantJoin = null;
       }
@@ -91,14 +272,30 @@ function handle(m) {
       break;
     case 'info': {
       const t = $('.pad .title');
-      if (t) t.innerHTML = m.html ?? esc(m.text);
+      if (t) t.textContent = m.text;
+      if (current) current.title = m.text;
       break;
     }
+    case 'pong':
+      if (m.ts) {
+        const r = performance.now() - m.ts;
+        if (r >= 0 && r < 5000) rtt = rtt ? rtt * 0.6 + r * 0.4 : r;
+        updateNet();
+      }
+      break;
+    case 'rtc':
+      onRtc(m);
+      break;
     case 'hostgone':
+      hostHere = false;
+      rtcStop();
       showOverlay('TV ekranının bağlantısı koptu. Geri gelmesi bekleniyor…');
       break;
     case 'hostback':
+      hostHere = true;
       hideOverlay();
+      rtcTries = 0;
+      setTimeout(rtcStart, 400);
       break;
     case 'closed':
     case 'kicked':
@@ -111,9 +308,12 @@ function leaveToJoin(msg) {
   wantJoin = null;
   slot = -1;
   current = null;
+  curSig = '';
   sess.del('kanepe.code');
   if (cleanupView) cleanupView();
   cleanupView = null;
+  releasePad = null;
+  rtcStop();
   $('#view').innerHTML = '';
   hideOverlay();
   $('#main').classList.add('hidden');
@@ -121,6 +321,7 @@ function leaveToJoin(msg) {
   $('#joinErr').textContent = msg || '';
   $('#joinBtn').disabled = false;
   document.body.style.removeProperty('--me');
+  updateNet();
 }
 
 function showOverlay(text) {
@@ -151,37 +352,29 @@ $('#joinForm').addEventListener('submit', (e) => {
   $('#joinErr').textContent = '';
   $('#joinBtn').disabled = true;
   wantJoin = { code, name };
-  if (ws && ws.readyState === 1) send({ t: 'join', code, name, id: myId });
+  wsSend({ t: 'join', code, name, id: myId });
   setTimeout(() => ($('#joinBtn').disabled = false), 3000);
 });
 
 // Sayfa yenilenmişse aynı odaya otomatik dön
-if (sess.get('kanepe.code') && nameIn.value) {
-  wantJoin = { code: sess.get('kanepe.code'), name: nameIn.value };
-}
+if (sess.get('kanepe.code') && nameIn.value) wantJoin = { code: sess.get('kanepe.code'), name: nameIn.value };
 
 $('#pauseBtn').addEventListener('click', () => {
-  send({ t: 'in', k: 'pause' });
+  sendIn({ k: 'pause' });
   vibrate(20);
 });
 $('#fsBtn').addEventListener('click', () => {
-  const d = document;
   try {
-    if (d.fullscreenElement) d.exitFullscreen();
-    else d.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
   } catch {}
 });
 if (!document.documentElement.requestFullscreen) $('#fsBtn').classList.add('hidden');
 
-// iOS'ta yakınlaştırmayı engelle
+// Yakınlaştırma / uzun basma menülerini engelle
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('contextmenu', (e) => e.preventDefault());
-let lastTouchEnd = 0;
-document.addEventListener('touchend', (e) => {
-  const now = Date.now();
-  if (now - lastTouchEnd < 300 && e.target.closest('.pad')) e.preventDefault();
-  lastTouchEnd = now;
-}, { passive: false });
+document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
 
 let wakeLock = null;
 async function keepAwake() {
@@ -193,15 +386,38 @@ async function keepAwake() {
   } catch {}
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && slot >= 0) keepAwake();
+  if (document.visibilityState === 'visible') {
+    if (slot >= 0) {
+      keepAwake();
+      if (!p2pOpen() && hostHere) {
+        rtcTries = 0;
+        rtcStart();
+      }
+    }
+  } else if (releasePad) releasePad();
 });
+window.addEventListener('pagehide', () => releasePad && releasePad());
 
 // ---------------------------------------------------------------- görünümler
+function sigOf(v) {
+  return JSON.stringify([v.mode, v.layout, v.dirs, v.a, v.b, v.side, v.padHint, v.options, v.cols, v.prompt, v.text, v.sel, v.lock]);
+}
+
 function render(v) {
   if (!v) return;
+  const sig = sigOf(v);
+  // Aynı kumanda tekrar gelirse yeniden kurma: basılı tuşlar bırakılmasın
+  if (current && v.mode === 'pad' && current.mode === 'pad' && sig === curSig) {
+    current = v;
+    const t = $('.pad .title');
+    if (t) t.textContent = v.title || '';
+    return;
+  }
   if (cleanupView) cleanupView();
   cleanupView = null;
+  releasePad = null;
   current = v;
+  curSig = sig;
   const box = $('#view');
   $('#pauseBtn').classList.toggle('hidden', !(v.mode === 'pad' && v.pause !== false));
   box.innerHTML = '';
@@ -215,36 +431,9 @@ function render(v) {
   panel.className = 'panel';
   box.appendChild(panel);
 
-  if (v.mode === 'lobby') {
-    panel.innerHTML = `
-      <h1>Oyun seç<small>${v.other ? `Rakibin: <b style="color:${PLAYER_COLORS[1 - slot]}">${esc(v.other)}</b>` : 'Rakibin bekleniyor… (oyunlar iki kişilik)'}</small></h1>
-      <div class="games">${(v.games || [])
-        .map((g) => `<button class="gcard" data-id="${esc(g.id)}" style="--c:${esc(g.color)}">
-            <span class="badge">${g.mode === 'coop' ? 'TAKIM' : 'KAPIŞMA'}</span>
-            <span class="gi">${esc(g.icon)}</span><b>${esc(g.name)}</b><small>${esc(g.tag)}</small></button>`)
-        .join('')}</div>`;
-    panel.querySelectorAll('.gcard').forEach((b) =>
-      b.addEventListener('click', () => {
-        vibrate(25);
-        send({ t: 'in', k: 'pick', id: b.dataset.id });
-      })
-    );
-  } else if (v.mode === 'intro') {
-    const g = v.game || {};
-    panel.innerHTML = `
-      <h1><span style="color:${esc(g.color)}">${esc(g.icon)}</span> ${esc(g.name)}<small>${esc(g.tag)} · ${g.mode === 'coop' ? 'Birlikte oyna' : 'Kafa kafaya'}</small></h1>
-      <p>${esc(g.desc)}</p>
-      <ul class="howto">${(g.howto || []).map((h) => `<li>${esc(h)}</li>`).join('')}</ul>
-      <button class="big ready ${v.ready ? 'done' : ''}" id="readyBtn">${v.ready ? '✓ HAZIRSIN' : 'HAZIRIM!'}</button>
-      ${v.ready ? `<p style="text-align:center">${esc(v.waitText || 'Diğer oyuncu bekleniyor…')}</p>` : ''}
-      <button class="ghost" id="backBtn">← Oyun listesi</button>`;
-    $('#readyBtn', panel).addEventListener('click', () => {
-      if (v.ready) return;
-      vibrate(40);
-      send({ t: 'in', k: 'ready' });
-    });
-    $('#backBtn', panel).addEventListener('click', () => send({ t: 'in', k: 'back' }));
-  } else if (v.mode === 'menu') {
+  if (v.mode === 'lobby') renderLobby(panel, v);
+  else if (v.mode === 'intro') renderIntro(panel, v);
+  else if (v.mode === 'menu') {
     panel.classList.add('center');
     panel.innerHTML = `
       <h1>${esc(v.title)}${v.sub ? `<small>${esc(v.sub)}</small>` : ''}</h1>
@@ -252,10 +441,16 @@ function render(v) {
       <div class="menu">${(v.items || [])
         .map((it) => `<button data-id="${esc(it.id)}" class="${it.primary ? 'primary' : ''}">${esc(it.label)}</button>`)
         .join('')}</div>`;
-    panel.querySelectorAll('.menu button').forEach((b) =>
+    const btns = panel.querySelectorAll('.menu button');
+    btns.forEach((b) =>
       b.addEventListener('click', () => {
+        if (b.disabled) return;
         vibrate(25);
-        send({ t: 'in', k: 'menu', id: b.dataset.id });
+        // anında geri bildirim
+        btns.forEach((x) => (x.disabled = true));
+        b.classList.add('sent');
+        setTimeout(() => btns.forEach((x) => (x.disabled = false)), 1500);
+        sendIn({ k: 'menu', id: b.dataset.id });
       })
     );
   } else {
@@ -264,16 +459,74 @@ function render(v) {
   }
 }
 
+function renderLobby(panel, v) {
+  const games = v.games || [];
+  const inCat = (g, c) => c === 'all' || g.cat === c || (c === 'takim' && g.mode === 'coop');
+  const chips = CATS.filter(([c]) => c === 'all' || games.some((g) => inCat(g, c)))
+    .map(([c, n]) => `<button class="chip ${c === catFilter ? 'on' : ''}" data-c="${c}">${esc(n)}</button>`)
+    .join('');
+  panel.innerHTML = `
+    <h1>Oyun seç<small>${v.other ? `Rakibin: <b style="color:${PLAYER_COLORS[1 - slot]}">${esc(v.other)}</b>` : 'Rakibin bekleniyor… (oyunlar iki kişilik)'}</small></h1>
+    <div class="chips">${chips}</div>
+    <div class="games">${games
+      .map((g) => `<button class="gcard ${inCat(g, catFilter) ? '' : 'hidden'}" data-id="${esc(g.id)}" data-cat="${esc(g.cat)}" data-mode="${esc(g.mode)}" style="--c:${esc(g.color)}">
+          <span class="badge">${g.mode === 'coop' ? 'TAKIM' : 'KAPIŞMA'}</span>
+          <span class="gi">${esc(g.icon)}</span><b>${esc(g.name)}</b><small>${esc(g.tag)}</small></button>`)
+      .join('')}</div>`;
+  panel.querySelectorAll('.chip').forEach((c) =>
+    c.addEventListener('click', () => {
+      catFilter = c.dataset.c;
+      panel.querySelectorAll('.chip').forEach((x) => x.classList.toggle('on', x === c));
+      panel.querySelectorAll('.gcard').forEach((b) => b.classList.toggle('hidden', !inCat({ cat: b.dataset.cat, mode: b.dataset.mode }, catFilter)));
+    })
+  );
+  panel.querySelectorAll('.gcard').forEach((b) =>
+    b.addEventListener('click', () => {
+      vibrate(25);
+      b.classList.add('sent');
+      sendIn({ k: 'pick', id: b.dataset.id });
+    })
+  );
+}
+
+function renderIntro(panel, v) {
+  const g = v.game || {};
+  panel.classList.add('intro');
+  panel.innerHTML = `
+    <div class="introscroll">
+      <h1><span style="color:${esc(g.color)}">${esc(g.icon)}</span> ${esc(g.name)}<small>${esc(g.tag)} · ${g.mode === 'coop' ? 'Birlikte oyna' : 'Kafa kafaya'}</small></h1>
+      <p>${esc(g.desc)}</p>
+      <ul class="howto">${(g.howto || []).map((h) => `<li>${esc(h)}</li>`).join('')}</ul>
+    </div>
+    <div class="introbar">
+      <button class="big ready ${v.ready ? 'done' : ''}" id="readyBtn">${v.ready ? '✓ HAZIRSIN' : 'HAZIRIM!'}</button>
+      <p class="waittext ${v.ready ? '' : 'hidden'}">${esc(v.waitText || 'Diğer oyuncu bekleniyor…')}</p>
+      <button class="ghost" id="backBtn">← Oyun listesi</button>
+    </div>`;
+  const rb = $('#readyBtn', panel);
+  rb.addEventListener('click', () => {
+    if (rb.classList.contains('done')) return;
+    vibrate(40);
+    rb.classList.add('done');
+    rb.textContent = '✓ HAZIRSIN';
+    $('.waittext', panel).classList.remove('hidden');
+    sendIn({ k: 'ready' });
+  });
+  $('#backBtn', panel).addEventListener('click', () => sendIn({ k: 'back' }));
+}
+
 // ---------------------------------------------------------------- kumanda
 function buildPad(box, v) {
   const layout = v.layout || 'dpad';
   const dirs = v.dirs || 4;
   const btnList = [];
-  if (v.a !== null && v.a !== undefined) btnList.push(['a', 'A', v.a]);
-  if (v.b !== null && v.b !== undefined) btnList.push(['b', 'B', v.b]);
+  if (layout !== 'choice' && layout !== 'wait') {
+    if (v.a !== null && v.a !== undefined) btnList.push(['a', 'A', v.a]);
+    if (v.b !== null && v.b !== undefined) btnList.push(['b', 'B', v.b]);
+  }
 
   const pad = document.createElement('div');
-  pad.className = 'pad' + (layout === 'touch' && !btnList.length ? ' single' : '');
+  pad.className = `pad lay-${layout}` + (!btnList.length ? ' single' : '');
   let dirHTML = '';
   if (layout === 'dpad' && dirs === 'lr') {
     dirHTML = '<div class="lr"><div class="arm left">◀</div><div class="arm right">▶</div></div>';
@@ -283,14 +536,23 @@ function buildPad(box, v) {
     dirHTML = '<div class="stick"><div class="knob"></div></div>';
   } else if (layout === 'touch') {
     dirHTML = `<div class="touchpad" data-side="${esc(v.side || '')}"><div class="mid"></div><div class="goal"></div><div class="arrow">${esc(v.padHint || '')}</div><div class="dotf"></div></div>`;
+  } else if (layout === 'choice') {
+    const cols = v.cols || 3;
+    dirHTML = `<div class="choice">
+      ${v.prompt ? `<div class="prompt">${esc(v.prompt)}</div>` : ''}
+      <div class="cgrid" style="grid-template-columns:repeat(${cols},1fr)">${(v.options || [])
+        .map((o) => `<button class="copt ${v.sel === o.id ? 'sel' : ''} ${o.dis ? 'dis' : ''}" data-id="${esc(o.id)}" ${v.lock || o.dis ? 'disabled' : ''}>${esc(o.label)}${o.sub ? `<small>${esc(o.sub)}</small>` : ''}</button>`)
+        .join('')}</div></div>`;
+  } else if (layout === 'wait') {
+    dirHTML = `<div class="padwait"><div class="spinner"></div><b>${esc(v.text || 'Bekle…')}</b>${v.sub ? `<small>${esc(v.sub)}</small>` : ''}</div>`;
   }
   const btnHTML = btnList.length
-    ? `<div class="btns ${btnList.length === 1 ? 'solo' : ''}">${btnList
+    ? `<div class="btns ${btnList.length === 1 && layout !== 'ab' ? 'solo' : ''}">${(layout === 'ab' ? [...btnList].reverse() : btnList)
         .map(([k, l, label]) => `<div class="btn ${k}" data-k="${k}"><span>${l}</span>${label ? `<small>${esc(label)}</small>` : ''}</div>`)
         .join('')}</div>`
     : '';
-  pad.innerHTML = `<div class="title">${v.html ?? esc(v.title || '')}</div>
-    <div class="zones"><div class="zone dirz">${dirHTML}</div>${btnList.length ? `<div class="zone btnz">${btnHTML}</div>` : ''}</div>`;
+  pad.innerHTML = `<div class="title">${esc(v.title || '')}</div>
+    <div class="zones">${layout === 'ab' ? '' : `<div class="zone dirz">${dirHTML}</div>`}${btnList.length ? `<div class="zone btnz">${btnHTML}</div>` : ''}</div>`;
   box.appendChild(pad);
 
   const dirZone = $('.dirz', pad);
@@ -299,6 +561,35 @@ function buildPad(box, v) {
   const stickEl = $('.stick', pad);
   const touchEl = $('.touchpad', pad);
   const btnEls = [...pad.querySelectorAll('.btn')];
+  const armEls = {};
+  pad.querySelectorAll('.arm').forEach((e) => (armEls[[...e.classList].find((c) => BIT[c])] = e));
+  for (const b of btnEls) armEls[b.dataset.k] = b;
+
+  // Seçim düğmeleri (sıra tabanlı oyunlar)
+  if (layout === 'choice') {
+    pad.querySelectorAll('.copt').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (b.disabled) return;
+        vibrate(25);
+        pad.querySelectorAll('.copt').forEach((x) => x.classList.toggle('sel', x === b));
+        sendIn({ k: 'choose', id: b.dataset.id });
+      })
+    );
+  }
+
+  // Ölçüleri önbelleğe al (her dokunuşta yeniden hesaplamamak için)
+  let R = null;
+  function measure() {
+    const rect = (e) => (e ? e.getBoundingClientRect() : null);
+    R = {
+      dir: rect(dirEl),
+      dirZone: rect(dirZone),
+      btnZone: rect(btnZone),
+      touch: rect(touchEl),
+      stick: rect(stickEl),
+      btns: btnEls.map((b) => [b.dataset.k, rect(b)]),
+    };
+  }
 
   const pointers = new Map(); // pointerId -> {role, key}
   const keyCount = { up: 0, down: 0, left: 0, right: 0, a: 0, b: 0 };
@@ -307,42 +598,47 @@ function buildPad(box, v) {
 
   function keyDown(k) {
     if (keyCount[k]++ === 0) {
-      send({ t: 'in', k, d: 1 });
-      vibrate(12);
+      keys |= BIT[k];
+      sendIn({ k, d: 1 });
+      vibrate(10);
+      if (armEls[k]) armEls[k].classList.add('on');
     }
-    mark(k, true);
   }
   function keyUp(k) {
     if (keyCount[k] > 0 && --keyCount[k] === 0) {
-      send({ t: 'in', k, d: 0 });
-      mark(k, false);
+      keys &= ~BIT[k];
+      sendIn({ k, d: 0 });
+      if (armEls[k]) armEls[k].classList.remove('on');
     }
-  }
-  function mark(k, on) {
-    const e = k === 'a' || k === 'b' ? $(`.btn.${k}`, pad) : dirEl && $(`.arm.${k}`, dirEl);
-    if (e) e.classList.toggle('on', on && keyCount[k] > 0);
   }
 
   function computeDir(x, y) {
     const s = new Set();
-    if (!dirEl) return s;
-    const r = dirEl.getBoundingClientRect();
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-    const dx = x - cx;
-    const dy = y - cy;
+    if (!dirEl || !R.dir) return s;
+    const r = R.dir;
+    const dx = x - (r.left + r.width / 2);
+    const dy = y - (r.top + r.height / 2);
     if (dirs === 'lr') {
       s.add(dx < 0 ? 'left' : 'right');
       return s;
     }
-    if (Math.hypot(dx, dy) < r.width * 0.11) return s;
+    if (Math.hypot(dx, dy) < r.width * 0.1) return s;
     if (dirs === 8) {
       const sector = ((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8;
       const map = [['right'], ['right', 'down'], ['down'], ['down', 'left'], ['left'], ['left', 'up'], ['up'], ['up', 'right']];
       map[sector].forEach((k) => s.add(k));
-    } else {
-      s.add(Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : dy < 0 ? 'up' : 'down');
+      return s;
     }
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    let horiz = ax > ay;
+    // çapraza yakın titremeleri engelle: eksen değiştirmek için belirgin fark gerekir
+    if (dirSet.size === 1) {
+      const cur = [...dirSet][0];
+      const curH = cur === 'left' || cur === 'right';
+      if (curH !== horiz) horiz = curH ? ax * 1.3 > ay : !(ay * 1.3 > ax);
+    }
+    s.add(horiz ? (dx < 0 ? 'left' : 'right') : dy < 0 ? 'up' : 'down');
     return s;
   }
   function setDir(ns) {
@@ -354,78 +650,80 @@ function buildPad(box, v) {
   function nearestBtn(x, y) {
     let best = null;
     let bd = Infinity;
-    for (const b of btnEls) {
-      const r = b.getBoundingClientRect();
+    for (const [k, r] of R.btns) {
       const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)) / (r.width / 2);
-      if (d < bd) { bd = d; best = b.dataset.k; }
+      if (d < bd) {
+        bd = d;
+        best = k;
+      }
     }
     return best;
   }
 
-  // analog çubuk & dokunmatik saha gönderimi (saniyede ~40)
+  // analog çubuk & dokunmatik saha (en fazla ~60 Hz)
   let lastSend = 0;
-  let pending = null;
+  let pendingMsg = null;
   let sendTimer = null;
   function sendAnalog(m, force) {
-    pending = m;
+    pendingMsg = m;
     const now = performance.now();
-    if (force || now - lastSend >= 25) {
+    if (force || now - lastSend >= 15) {
       clearTimeout(sendTimer);
       sendTimer = null;
       lastSend = now;
-      send(pending);
-      pending = null;
+      sendIn(pendingMsg);
+      pendingMsg = null;
     } else if (!sendTimer) {
       sendTimer = setTimeout(() => {
         sendTimer = null;
         lastSend = performance.now();
-        if (pending) send(pending);
-        pending = null;
-      }, 25 - (now - lastSend));
+        if (pendingMsg) sendIn(pendingMsg);
+        pendingMsg = null;
+      }, 15 - (now - lastSend));
     }
   }
 
   let stickOrigin = null;
+  let knob = stickEl ? $('.knob', stickEl) : null;
   function resetStick() {
-    if (!stickEl) return;
-    const zr = dirZone.getBoundingClientRect();
+    if (!stickEl || !R) return;
+    const zr = R.dirZone;
     stickEl.style.left = zr.width / 2 + 'px';
     stickEl.style.top = (window.innerHeight > window.innerWidth ? zr.height * 0.62 : zr.height / 2) + 'px';
-    $('.knob', stickEl).style.transform = '';
+    knob.style.transform = '';
   }
   function moveStick(x, y) {
-    const r = stickEl.getBoundingClientRect();
-    const R = r.width * 0.4;
-    let dx = (x - stickOrigin.x) / R;
-    let dy = (y - stickOrigin.y) / R;
+    const R0 = (R.stick ? R.stick.width : 200) * 0.4;
+    let dx = (x - stickOrigin.x) / R0;
+    let dy = (y - stickOrigin.y) / R0;
     const m = Math.hypot(dx, dy);
-    if (m > 1) { dx /= m; dy /= m; }
-    $('.knob', stickEl).style.transform = `translate(${dx * R}px, ${dy * R}px)`;
-    sendAnalog({ t: 'in', k: 'stick', x: +dx.toFixed(2), y: +dy.toFixed(2) });
+    if (m > 1) {
+      dx /= m;
+      dy /= m;
+    }
+    knob.style.transform = `translate(${dx * R0}px, ${dy * R0}px)`;
+    sendAnalog({ k: 'stick', x: +dx.toFixed(2), y: +dy.toFixed(2) });
   }
 
+  let dot = touchEl ? $('.dotf', touchEl) : null;
   function touchPos(x, y) {
-    const r = touchEl.getBoundingClientRect();
+    const r = R.touch;
     const nx = Math.min(1, Math.max(0, (x - r.left) / r.width));
     const ny = Math.min(1, Math.max(0, (y - r.top) / r.height));
-    const dot = $('.dotf', touchEl);
-    dot.style.left = nx * 100 + '%';
-    dot.style.top = ny * 100 + '%';
+    dot.style.transform = `translate(${nx * r.width}px, ${ny * r.height}px)`;
     return [nx, ny];
   }
 
-  function inZone(z, x, y) {
-    if (!z) return false;
-    const r = z.getBoundingClientRect();
-    return x >= r.left && x <= r.right && y >= r.top - 60 && y <= r.bottom;
-  }
+  const inRect = (r, x, y) => r && x >= r.left && x <= r.right && y >= r.top - 60 && y <= r.bottom;
 
   function down(e) {
+    if (layout === 'choice' || layout === 'wait') return;
     e.preventDefault();
+    if (!R) measure();
     try { pad.setPointerCapture(e.pointerId); } catch {}
     const x = e.clientX;
     const y = e.clientY;
-    if (btnZone && inZone(btnZone, x, y)) {
+    if (btnZone && (layout === 'ab' || inRect(R.btnZone, x, y))) {
       const k = nearestBtn(x, y);
       pointers.set(e.pointerId, { role: 'btn', key: k });
       keyDown(k);
@@ -435,20 +733,19 @@ function buildPad(box, v) {
       pointers.set(e.pointerId, { role: 'touch' });
       touchEl.classList.add('on');
       const [nx, ny] = touchPos(x, y);
-      sendAnalog({ t: 'in', k: 'pad', x: +nx.toFixed(3), y: +ny.toFixed(3), d: 1 }, true);
+      sendAnalog({ k: 'pad', x: +nx.toFixed(3), y: +ny.toFixed(3), d: 1 }, true);
       return;
     }
     if (layout === 'stick') {
       for (const [id, p] of pointers) if (p.role === 'stick') pointers.delete(id);
       pointers.set(e.pointerId, { role: 'stick' });
-      const zr = dirZone.getBoundingClientRect();
+      const zr = R.dirZone;
       stickOrigin = { x, y };
       stickEl.style.left = x - zr.left + 'px';
       stickEl.style.top = y - zr.top + 'px';
       moveStick(x, y);
       return;
     }
-    // d-pad: yeni parmak eskisini devralır
     if (dirPointer !== null) pointers.delete(dirPointer);
     dirPointer = e.pointerId;
     pointers.set(e.pointerId, { role: 'dir' });
@@ -464,7 +761,7 @@ function buildPad(box, v) {
     if (p.role === 'dir') setDir(computeDir(x, y));
     else if (p.role === 'btn') {
       const k = nearestBtn(x, y);
-      if (k !== p.key && inZone(btnZone, x, y)) {
+      if (k !== p.key && (layout === 'ab' || inRect(R.btnZone, x, y))) {
         keyUp(p.key);
         p.key = k;
         keyDown(k);
@@ -472,7 +769,7 @@ function buildPad(box, v) {
     } else if (p.role === 'stick') moveStick(x, y);
     else if (p.role === 'touch') {
       const [nx, ny] = touchPos(x, y);
-      sendAnalog({ t: 'in', k: 'pad', x: +nx.toFixed(3), y: +ny.toFixed(3), d: 1 });
+      sendAnalog({ k: 'pad', x: +nx.toFixed(3), y: +ny.toFixed(3), d: 1 });
     }
   }
 
@@ -487,12 +784,35 @@ function buildPad(box, v) {
       }
     } else if (p.role === 'btn') keyUp(p.key);
     else if (p.role === 'stick') {
-      sendAnalog({ t: 'in', k: 'stick', x: 0, y: 0 }, true);
+      sendAnalog({ k: 'stick', x: 0, y: 0 }, true);
       resetStick();
     } else if (p.role === 'touch') {
       touchEl.classList.remove('on');
-      sendAnalog({ t: 'in', k: 'pad', d: 0 }, true);
+      sendAnalog({ k: 'pad', d: 0 }, true);
     }
+  }
+
+  function releaseAll() {
+    pointers.clear();
+    dirPointer = null;
+    for (const k of Object.keys(keyCount)) if (keyCount[k] > 0) {
+      keyCount[k] = 1;
+      keyUp(k);
+    }
+    dirSet = new Set();
+    if (layout === 'stick') {
+      sendAnalog({ k: 'stick', x: 0, y: 0 }, true);
+      resetStick();
+    }
+    if (layout === 'touch') {
+      touchEl.classList.remove('on');
+      sendAnalog({ k: 'pad', d: 0 }, true);
+    }
+  }
+
+  function onResize() {
+    measure();
+    resetStick();
   }
 
   pad.addEventListener('pointerdown', down);
@@ -500,16 +820,20 @@ function buildPad(box, v) {
   pad.addEventListener('pointerup', up);
   pad.addEventListener('pointercancel', up);
   pad.addEventListener('lostpointercapture', up);
-  requestAnimationFrame(resetStick);
-  window.addEventListener('resize', resetStick);
+  window.addEventListener('resize', onResize);
+  window.addEventListener('orientationchange', onResize);
+  requestAnimationFrame(() => {
+    measure();
+    resetStick();
+  });
+  releasePad = releaseAll;
 
   return () => {
-    window.removeEventListener('resize', resetStick);
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('orientationchange', onResize);
     clearTimeout(sendTimer);
-    // basılı kalan tuşları bırak
-    for (const k of Object.keys(keyCount)) if (keyCount[k] > 0) { keyCount[k] = 1; keyUp(k); }
-    if (layout === 'stick') send({ t: 'in', k: 'stick', x: 0, y: 0 });
-    if (layout === 'touch') send({ t: 'in', k: 'pad', d: 0 });
+    releaseAll();
+    keys = 0;
   };
 }
 

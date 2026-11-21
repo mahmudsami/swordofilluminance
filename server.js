@@ -153,7 +153,7 @@ function freeSlot(room, i, reason) {
   out(room.host, { t: 'pgone', p: i });
 }
 
-const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: false, maxPayload: 16 * 1024 });
+const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: false, maxPayload: 64 * 1024 });
 
 wss.on('connection', (ws) => {
   ws.alive = true;
@@ -193,7 +193,7 @@ wss.on('connection', (ws) => {
     if (ws.role === 'host') {
       const room = ws.room;
       if (!room) return;
-      if (m.t === 'ctl' || m.t === 'buzz' || m.t === 'info') {
+      if (m.t === 'ctl' || m.t === 'buzz' || m.t === 'info' || m.t === 'pong' || m.t === 'rtc') {
         const targets = m.to === 'all' || m.to === undefined ? [0, 1] : [Number(m.to)].filter((i) => i >= 0 && i < MAX_PLAYERS);
         for (const i of targets) {
           if (m.t === 'ctl') room.ctl[i] = m.view;
@@ -249,7 +249,8 @@ wss.on('connection', (ws) => {
         freeSlot(room, ws.slot, 'Odadan çıktın');
         return;
       }
-      if (m.t === 'in') {
+      // Kumanda girdileri ve WebRTC el sıkışması TV'ye aynen iletilir
+      if (m.t === 'in' || m.t === 'rtc') {
         m.p = ws.slot;
         out(room.host, m);
       }

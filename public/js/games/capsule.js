@@ -1,16 +1,22 @@
 // KAPSÜL KAPIŞMASI — renkli kapsüllerle mikrop temizleme yarışı.
 // Aynı renkten 4'ü yan yana / üst üste gelince silinir. Mikroplarını ilk bitiren raundu alır.
 // Kombolar rakibin şişesine fazladan yarım kapsül yağdırır.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, winDots, shade, randi } from '../host/gfx.js';
+import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, winDots, shade, randi, sprite, Layer } from '../host/gfx.js';
 
 const COLS = 8;
 const ROWS = 16;
 const CELL = 34;
 const NEED = 2;
 const DAS = 0.15;
-const ARR = 0.055;
+const ARR = 0.05;
+const LOCK = 0.22;
 const PILL = ['#ff4f6d', '#ffd23f', '#39a0ff'];
 const GERMS = 12;
+const BX = [184, 824];
+const BY = 140;
+const BW = COLS * CELL;
+const BH = ROWS * CELL;
+const QX = [50, 1134];
 
 function emptyGrid() {
   return Array.from({ length: ROWS }, () => Array(COLS).fill(null));
@@ -37,10 +43,94 @@ function makeGerms(n) {
       return k;
     };
     if (same(-1, 0) + same(1, 0) >= 2 || same(0, -1) + same(0, 1) >= 2) continue;
-    grid[y][x] = { c, kind: 'germ', seed: Math.random() * 10 };
+    grid[y][x] = { c, kind: 'germ', seed: (Math.random() * 4) | 0 };
     placed++;
   }
   return grid;
+}
+
+// ------------------------------------------------------------------ sprite'lar
+function pillSprite(color, link) {
+  return sprite(`pill|${color}|${link}`, CELL, CELL, (g) => {
+    const r = CELL / 2 - 2;
+    const col = PILL[color];
+    const rad = [r, r, r, r]; // sol-üst, sağ-üst, sağ-alt, sol-alt
+    if (link === 'R') rad[1] = rad[2] = 4;
+    if (link === 'L') rad[0] = rad[3] = 4;
+    if (link === 'D') rad[2] = rad[3] = 4;
+    if (link === 'U') rad[0] = rad[1] = 4;
+    const ow = CELL - 4 + (link === 'R' || link === 'L' ? 2 : 0);
+    const oh = CELL - 4 + (link === 'D' || link === 'U' ? 2 : 0);
+    const sx = link === 'L' ? 0 : 2;
+    const sy = link === 'U' ? 0 : 2;
+    g.beginPath();
+    if (g.roundRect) g.roundRect(sx, sy, ow, oh, rad);
+    else g.rect(sx, sy, ow, oh);
+    const grad = g.createLinearGradient(0, 0, 0, CELL);
+    grad.addColorStop(0, shade(col, 0.3));
+    grad.addColorStop(1, shade(col, -0.2));
+    g.fillStyle = grad;
+    g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.3)';
+    g.lineWidth = 2;
+    g.stroke();
+    g.fillStyle = 'rgba(255,255,255,.45)';
+    g.beginPath();
+    g.ellipse(CELL / 2 - 4, CELL / 2 - 6, 6, 3.5, -0.4, 0, Math.PI * 2);
+    g.fill();
+  });
+}
+
+// mikrop: 4 animasyon karesi + ölüm karesi, renk başına önceden çizilir
+function germSprite(color, frame, dying) {
+  return sprite(`germ|${color}|${frame}|${dying ? 1 : 0}`, CELL, CELL, (g) => {
+    const col = PILL[color];
+    const r = CELL * 0.4;
+    const t = (frame / 4) * Math.PI * 2;
+    g.translate(CELL / 2, CELL / 2);
+    g.beginPath();
+    for (let i = 0; i <= 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const rr2 = r * (1 + 0.12 * Math.sin(a * 6 + t) + 0.04 * Math.cos(t));
+      const px = Math.cos(a) * rr2;
+      const py = Math.sin(a) * rr2 * 0.92;
+      i ? g.lineTo(px, py) : g.moveTo(px, py);
+    }
+    g.closePath();
+    g.fillStyle = shade(col, -0.1);
+    g.fill();
+    g.strokeStyle = shade(col, -0.5);
+    g.lineWidth = 2;
+    g.stroke();
+    const look = Math.sin(t) * 0.6;
+    for (const s of [-1, 1]) {
+      g.fillStyle = '#fff';
+      g.beginPath();
+      g.arc(s * r * 0.36, -r * 0.18, r * 0.27, 0, Math.PI * 2);
+      g.fill();
+      if (dying) {
+        g.strokeStyle = '#111';
+        g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(s * r * 0.36 - 3, -r * 0.18 - 3);
+        g.lineTo(s * r * 0.36 + 3, -r * 0.18 + 3);
+        g.moveTo(s * r * 0.36 + 3, -r * 0.18 - 3);
+        g.lineTo(s * r * 0.36 - 3, -r * 0.18 + 3);
+        g.stroke();
+      } else {
+        g.fillStyle = '#141225';
+        g.beginPath();
+        g.arc(s * r * 0.36 + look * 2, -r * 0.14, r * 0.13, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    g.strokeStyle = '#141225';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(-r * 0.3, r * 0.32);
+    for (let i = 1; i <= 4; i++) g.lineTo(-r * 0.3 + i * r * 0.15, r * 0.32 + (i % 2 ? -3 : 0));
+    g.stroke();
+  });
 }
 
 class Bottle {
@@ -51,18 +141,19 @@ class Bottle {
     this.germs = this.countGerms();
     this.capsuleN = 0;
     this.cap = null;
-    this.phase = 'spawn'; // spawn | fall | clear | drop
+    this.phase = 'spawn'; // spawn | play | fall | clear
     this.t = 0.2;
     this.groups = 0;
     this.chain = 0;
     this.incoming = [];
     this.dead = false;
     this.dropT = 0;
+    this.lockT = 0;
     this.dasDir = null;
     this.dasT = 0;
     this.shake = new Shake();
-    this.x0 = p === 0 ? 184 : 824;
-    this.y0 = 140;
+    this.x0 = BX[p];
+    this.y0 = BY;
     this.clearSet = null;
   }
 
@@ -95,13 +186,26 @@ class Bottle {
     return this.cells(c).every(([x, y]) => !this.blocked(x, y));
   }
 
+  grounded() {
+    return this.cap && !this.fits({ ...this.cap, y: this.cap.y + 1 });
+  }
+
   spawn() {
     const nx = this.game.capAt(this.capsuleN++);
     this.cap = { x: 3, y: 0, o: 0, a: nx[0], b: nx[1] };
     this.dropT = 0;
+    this.lockT = 0;
+    this.lockN = 0;
     if (!this.fits(this.cap)) {
       this.cap = null;
       this.die();
+    }
+  }
+
+  touched() {
+    if (this.grounded() && this.lockN < 10) {
+      this.lockT = 0;
+      this.lockN++;
     }
   }
 
@@ -110,6 +214,7 @@ class Bottle {
     const c = { ...this.cap, x: this.cap.x + dx };
     if (!this.fits(c)) return false;
     this.cap = c;
+    this.touched();
     this.api.sfx('move');
     return true;
   }
@@ -121,6 +226,7 @@ class Bottle {
       const c = { ...this.cap, o, x: this.cap.x + kx };
       if (this.fits(c)) {
         this.cap = c;
+        this.touched();
         this.api.sfx('rotate');
         return;
       }
@@ -146,22 +252,18 @@ class Bottle {
       this.groups += set.groups;
       this.chain++;
       this.phase = 'clear';
-      this.t = 0.32;
+      this.t = 0.3;
       this.api.sfx(this.chain > 1 ? 'big' : 'clear');
-      if (this.chain > 1) this.game.pops.add(`ZİNCİR x${this.chain}`, this.x0 + (COLS * CELL) / 2, this.y0 + 200, '#46e38a', 40);
+      if (this.chain > 1) this.game.pops.add(`ZİNCİR x${this.chain}`, this.x0 + BW / 2, this.y0 + 200, '#46e38a', 40);
     } else {
-      // çözüm bitti
-      if (this.groups >= 2) {
-        const n = Math.min(4, this.groups);
-        this.game.sendGarbage(1 - this.p, n);
-      }
+      if (this.groups >= 2) this.game.sendGarbage(1 - this.p, Math.min(4, this.groups));
       if (this.incoming.length) {
         this.dropGarbage();
         this.phase = 'fall';
         this.t = 0.08;
       } else {
         this.phase = 'spawn';
-        this.t = 0.12;
+        this.t = 0.1;
       }
     }
   }
@@ -169,29 +271,38 @@ class Bottle {
   findMatches() {
     const mark = new Set();
     let groups = 0;
-    const scan = (len1, len2, get) => {
-      for (let i = 0; i < len1; i++) {
-        let run = 1;
-        for (let j = 1; j <= len2; j++) {
-          const a = j < len2 ? get(i, j) : null;
-          const b = get(i, j - 1);
-          if (a && b && a.c === b.c) run++;
-          else {
-            if (b && run >= 4) {
-              groups++;
-              for (let k = j - run; k < j; k++) mark.add(get.key(i, k));
-            }
-            run = 1;
+    // yatay
+    for (let y = 0; y < ROWS; y++) {
+      let run = 1;
+      for (let x = 1; x <= COLS; x++) {
+        const a = x < COLS ? this.grid[y][x] : null;
+        const b = this.grid[y][x - 1];
+        if (a && b && a.c === b.c) run++;
+        else {
+          if (b && run >= 4) {
+            groups++;
+            for (let k = x - run; k < x; k++) mark.add(y * COLS + k);
           }
+          run = 1;
         }
       }
-    };
-    const getH = (y, x) => this.grid[y][x];
-    getH.key = (y, x) => y * COLS + x;
-    const getV = (x, y) => this.grid[y][x];
-    getV.key = (x, y) => y * COLS + x;
-    scan(ROWS, COLS, getH);
-    scan(COLS, ROWS, getV);
+    }
+    // dikey
+    for (let x = 0; x < COLS; x++) {
+      let run = 1;
+      for (let y = 1; y <= ROWS; y++) {
+        const a = y < ROWS ? this.grid[y][x] : null;
+        const b = this.grid[y - 1][x];
+        if (a && b && a.c === b.c) run++;
+        else {
+          if (b && run >= 4) {
+            groups++;
+            for (let k = y - run; k < y; k++) mark.add(k * COLS + x);
+          }
+          run = 1;
+        }
+      }
+    }
     return mark.size ? { cells: mark, groups } : null;
   }
 
@@ -203,22 +314,19 @@ class Bottle {
       const c = this.grid[y][x];
       if (!c) continue;
       if (c.kind === 'germ') germs++;
-      // eşini serbest bırak
       const d = { L: [-1, 0], R: [1, 0], U: [0, -1], D: [0, 1] }[c.link];
       if (d) {
         const o = this.grid[y + d[1]]?.[x + d[0]];
         if (o) o.link = null;
       }
       this.grid[y][x] = null;
-      const sx = this.x0 + (x + 0.5) * CELL;
-      const sy = this.y0 + (y + 0.5) * CELL;
-      this.game.parts.burst(sx, sy, c.kind === 'germ' ? 14 : 6, [PILL[c.c], shade(PILL[c.c], 0.4)], { speed: 280, size: 7, life: 0.7 });
+      this.game.parts.burst(this.x0 + (x + 0.5) * CELL, this.y0 + (y + 0.5) * CELL, c.kind === 'germ' ? 12 : 5, [PILL[c.c], shade(PILL[c.c], 0.4)], { speed: 280, size: 7, life: 0.6 });
     }
     this.clearSet = null;
     if (germs) {
       this.germs = this.countGerms();
       this.api.buzz(this.p, 40);
-      this.game.pops.add(`-${germs}`, this.x0 + (COLS * CELL) / 2, this.y0 + ROWS * CELL + 30, '#46e38a', 34);
+      this.game.pops.add(`-${germs}`, this.x0 + BW / 2, this.y0 + BH + 30, '#46e38a', 34);
     }
   }
 
@@ -230,7 +338,7 @@ class Bottle {
         const c = G[y][x];
         if (!c || c.kind !== 'pill') continue;
         if (c.link === 'R') {
-          if (!G[y + 1][x] && !G[y + 1][x + 1] && G[y][x + 1]) {
+          if (G[y][x + 1] && !G[y + 1][x] && !G[y + 1][x + 1]) {
             G[y + 1][x] = c;
             G[y + 1][x + 1] = G[y][x + 1];
             G[y][x] = G[y][x + 1] = null;
@@ -323,7 +431,7 @@ class Bottle {
     if (this.phase === 'fall') {
       this.t -= dt;
       if (this.t <= 0) {
-        if (this.fallStep()) this.t = 0.065;
+        if (this.fallStep()) this.t = 0.06;
         else this.startResolve();
       }
       return;
@@ -343,168 +451,53 @@ class Bottle {
         }
       }
     }
-    const grav = inp.down ? Math.min(0.035, this.speed) : this.speed;
+    const fast = inp.down;
+    const grav = fast ? Math.min(0.035, this.speed) : this.speed;
     this.dropT += dt;
     while (this.dropT >= grav && this.cap) {
       this.dropT -= grav;
       const c = { ...this.cap, y: this.cap.y + 1 };
-      if (this.fits(c)) this.cap = c;
-      else {
-        this.lock();
+      if (this.fits(c)) {
+        this.cap = c;
+        this.lockT = 0;
+      } else {
+        this.dropT = 0;
         break;
       }
     }
-  }
-
-  // ---------------------------------------------------------------- çizim
-  drawPillCell(g, x, y, color, link, alpha = 1) {
-    const px = this.x0 + x * CELL;
-    const py = this.y0 + y * CELL;
-    const r = CELL / 2 - 2;
-    const col = PILL[color];
-    g.save();
-    g.globalAlpha = alpha;
-    g.beginPath();
-    const cx = px + CELL / 2;
-    const cy = py + CELL / 2;
-    // yuvarlak taraf eşin tersinde
-    const rad = [r, r, r, r]; // tl, tr, br, bl
-    if (link === 'R') { rad[1] = rad[2] = 4; }
-    if (link === 'L') { rad[0] = rad[3] = 4; }
-    if (link === 'D') { rad[2] = rad[3] = 4; }
-    if (link === 'U') { rad[0] = rad[1] = 4; }
-    const ox = link === 'R' ? 2 : 2;
-    const ow = CELL - 4 + (link === 'R' || link === 'L' ? 2 : 0);
-    const oh = CELL - 4 + (link === 'D' || link === 'U' ? 2 : 0);
-    const sx = link === 'L' ? px : px + ox;
-    const sy = link === 'U' ? py : py + 2;
-    if (g.roundRect) g.roundRect(sx, sy, ow, oh, rad);
-    else g.rect(sx, sy, ow, oh);
-    const grad = g.createLinearGradient(px, py, px, py + CELL);
-    grad.addColorStop(0, shade(col, 0.3));
-    grad.addColorStop(1, shade(col, -0.2));
-    g.fillStyle = grad;
-    g.fill();
-    g.strokeStyle = 'rgba(0,0,0,.3)';
-    g.lineWidth = 2;
-    g.stroke();
-    g.fillStyle = 'rgba(255,255,255,.45)';
-    g.beginPath();
-    g.ellipse(cx - 4, cy - 6, 6, 3.5, -0.4, 0, Math.PI * 2);
-    g.fill();
-    g.restore();
-  }
-
-  drawGerm(g, x, y, cell, time, dying) {
-    const col = PILL[cell.c];
-    const cx = this.x0 + (x + 0.5) * CELL;
-    const cy = this.y0 + (y + 0.5) * CELL;
-    const t = time * 3 + cell.seed;
-    const r = CELL * 0.4;
-    g.save();
-    g.translate(cx, cy);
-    // dalgalı gövde
-    g.beginPath();
-    for (let i = 0; i <= 24; i++) {
-      const a = (i / 24) * Math.PI * 2;
-      const rr2 = r * (1 + 0.12 * Math.sin(a * 6 + t * 2) + 0.05 * Math.sin(t));
-      const px = Math.cos(a) * rr2;
-      const py = Math.sin(a) * rr2 * 0.92;
-      i ? g.lineTo(px, py) : g.moveTo(px, py);
+    // zemine değince kısa bir süre kaydırma/döndürme payı
+    if (this.cap && this.grounded()) {
+      this.lockT += fast ? dt * 3 : dt;
+      if (this.lockT >= LOCK) this.lock();
     }
-    g.closePath();
-    g.fillStyle = shade(col, -0.1);
-    g.fill();
-    g.strokeStyle = shade(col, -0.5);
-    g.lineWidth = 2;
-    g.stroke();
-    // gözler
-    const look = Math.sin(t * 0.7) * 0.6;
-    for (const s of [-1, 1]) {
-      g.fillStyle = '#fff';
-      g.beginPath();
-      g.arc(s * r * 0.36, -r * 0.18, r * 0.27, 0, Math.PI * 2);
-      g.fill();
-      if (dying) {
-        g.strokeStyle = '#111';
-        g.lineWidth = 2;
-        g.beginPath();
-        g.moveTo(s * r * 0.36 - 3, -r * 0.18 - 3);
-        g.lineTo(s * r * 0.36 + 3, -r * 0.18 + 3);
-        g.moveTo(s * r * 0.36 + 3, -r * 0.18 - 3);
-        g.lineTo(s * r * 0.36 - 3, -r * 0.18 + 3);
-        g.stroke();
-      } else {
-        g.fillStyle = '#141225';
-        g.beginPath();
-        g.arc(s * r * 0.36 + look * 2, -r * 0.14, r * 0.13, 0, Math.PI * 2);
-        g.fill();
-      }
-    }
-    // ağız
-    g.strokeStyle = '#141225';
-    g.lineWidth = 2;
-    g.beginPath();
-    g.moveTo(-r * 0.3, r * 0.32);
-    for (let i = 1; i <= 4; i++) g.lineTo(-r * 0.3 + i * r * 0.15, r * 0.32 + (i % 2 ? -3 : 0));
-    g.stroke();
-    g.restore();
   }
 
   draw(g, time) {
     const { x0, y0 } = this;
-    const bw = COLS * CELL;
-    const bh = ROWS * CELL;
-    const col = PCOL[this.p];
     g.save();
     this.shake.apply(g);
-
-    // şişe gövdesi
-    g.save();
-    g.shadowColor = col;
-    g.shadowBlur = 24;
-    g.lineWidth = 8;
-    g.strokeStyle = shade(col, -0.2);
-    g.beginPath();
-    const nx0 = x0 + 2.5 * CELL;
-    const nx1 = x0 + 5.5 * CELL;
-    g.moveTo(nx0, y0 - 46);
-    g.lineTo(nx0, y0 - 10);
-    g.lineTo(x0 - 6, y0 - 10);
-    g.lineTo(x0 - 6, y0 + bh + 6);
-    g.quadraticCurveTo(x0 - 6, y0 + bh + 12, x0, y0 + bh + 12);
-    g.lineTo(x0 + bw, y0 + bh + 12);
-    g.quadraticCurveTo(x0 + bw + 6, y0 + bh + 12, x0 + bw + 6, y0 + bh + 6);
-    g.lineTo(x0 + bw + 6, y0 - 10);
-    g.lineTo(nx1, y0 - 10);
-    g.lineTo(nx1, y0 - 46);
-    g.stroke();
-    g.restore();
-    g.fillStyle = 'rgba(14,12,40,.92)';
-    g.fillRect(x0 - 2, y0 - 6, bw + 4, bh + 14);
-    g.fillRect(nx0 + 4, y0 - 44, nx1 - nx0 - 8, 40);
-    // şişe camı yansıması
-    g.fillStyle = 'rgba(255,255,255,.04)';
-    g.fillRect(x0 + 6, y0, 10, bh);
-    // ızgara noktaları
-    g.fillStyle = 'rgba(255,255,255,.05)';
-    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) g.fillRect(x0 + x * CELL + CELL / 2 - 1, y0 + y * CELL + CELL / 2 - 1, 2, 2);
-
+    const frame = Math.floor(time * 6) % 4;
     for (let y = 0; y < ROWS; y++) {
+      const row = this.grid[y];
       for (let x = 0; x < COLS; x++) {
-        const c = this.grid[y][x];
+        const c = row[x];
         if (!c) continue;
         const clearing = this.clearSet && this.clearSet.has(y * COLS + x);
-        const blink = clearing && Math.floor(time * 20) % 2;
-        if (c.kind === 'germ') this.drawGerm(g, x, y, c, time, clearing);
-        else this.drawPillCell(g, x, y, c.c, c.link, blink ? 0.35 : 1);
+        const px = x0 + x * CELL;
+        const py = y0 + y * CELL;
+        if (c.kind === 'germ') g.drawImage(germSprite(c.c, (frame + c.seed) % 4, clearing), px, py, CELL, CELL);
+        else {
+          if (clearing && Math.floor(time * 20) % 2) g.globalAlpha = 0.35;
+          g.drawImage(pillSprite(c.c, c.link), px, py, CELL, CELL);
+          g.globalAlpha = 1;
+        }
         if (clearing) {
           g.fillStyle = 'rgba(255,255,255,.35)';
-          g.fillRect(x0 + x * CELL + 2, y0 + y * CELL + 2, CELL - 4, CELL - 4);
+          g.fillRect(px + 2, py + 2, CELL - 4, CELL - 4);
         }
       }
     }
-    if (this.cap) for (const [x, y, c, link] of this.cells()) this.drawPillCell(g, x, y, c, link);
+    if (this.cap) for (const [x, y, c, link] of this.cells()) g.drawImage(pillSprite(c, link), x0 + x * CELL, y0 + y * CELL, CELL, CELL);
 
     if (this.incoming.length) {
       for (let i = 0; i < this.incoming.length; i++) {
@@ -518,36 +511,16 @@ class Bottle {
 
     if (this.dead) {
       g.fillStyle = 'rgba(8,6,24,.6)';
-      g.fillRect(x0 - 2, y0 - 6, bw + 4, bh + 14);
-      text(g, 'TIKANDI!', x0 + bw / 2, y0 + bh / 2, { size: 50, color: '#ff6b7a', weight: 800, stroke: '#1a0a14', sw: 8 });
+      g.fillRect(x0 - 2, y0 - 6, BW + 4, BH + 14);
+      text(g, 'TIKANDI!', x0 + BW / 2, y0 + BH / 2, { size: 50, color: '#ff6b7a', weight: 800, stroke: '#1a0a14', sw: 8 });
     }
     g.restore();
 
-    // başlık
-    text(g, this.api.players[this.p].name, x0 + bw / 2, 34, { size: 36, color: col, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 6 });
-    winDots(g, x0 + bw / 2, 66, this.game.wins[this.p], NEED, col);
-
-    // sıradaki kapsül
-    const qx = this.p === 0 ? 50 : 1134;
-    rr(g, qx, y0, 96, 104, 14);
-    g.fillStyle = 'rgba(255,255,255,.05)';
-    g.fill();
-    text(g, 'SIRADA', qx + 48, y0 + 20, { size: 18, color: '#a7a2d1' });
+    winDots(g, x0 + BW / 2, 66, this.game.wins[this.p], NEED, PCOL[this.p]);
+    const qx = QX[this.p];
     const nx = this.game.capAt(this.capsuleN);
-    const sx = this.x0;
-    const sy = this.y0;
-    this.x0 = qx + 48 - CELL;
-    this.y0 = y0 + 50;
-    this.drawPillCell(g, 0, 0, nx[0], 'R');
-    this.drawPillCell(g, 1, 0, nx[1], 'L');
-    this.x0 = sx;
-    this.y0 = sy;
-
-    // mikrop sayacı
-    rr(g, qx, y0 + 124, 96, 120, 14);
-    g.fillStyle = 'rgba(255,255,255,.05)';
-    g.fill();
-    text(g, 'MİKROP', qx + 48, y0 + 146, { size: 18, color: '#a7a2d1' });
+    g.drawImage(pillSprite(nx[0], 'R'), qx + 48 - CELL, y0 + 50, CELL, CELL);
+    g.drawImage(pillSprite(nx[1], 'L'), qx + 48, y0 + 50, CELL, CELL);
     text(g, String(this.germs), qx + 48, y0 + 198, { size: 56, color: this.germs <= 3 ? '#46e38a' : '#fff', weight: 800 });
   }
 }
@@ -560,6 +533,7 @@ class CapsuleGame {
     this.parts = new Particles();
     this.pops = new Popups();
     this.time = 0;
+    this.bg = new Layer(W, H, (g) => this.paintBg(g));
     this.newRound();
   }
 
@@ -582,7 +556,7 @@ class CapsuleGame {
   sendGarbage(p, n) {
     const b = this.bottles[p];
     for (let i = 0; i < n; i++) b.incoming.push(randi(0, 2));
-    this.pops.add(`+${n} KAPSÜL`, b.x0 + (COLS * CELL) / 2, b.y0 + 120, '#ff5a6a', 36);
+    this.pops.add(`+${n} KAPSÜL`, b.x0 + BW / 2, b.y0 + 120, '#ff5a6a', 36);
   }
 
   onKey(p, k, down) {
@@ -633,29 +607,54 @@ class CapsuleGame {
     this.bottles[1].cap = { x: 4, y: 3, o: 0, a: 1, b: 1 };
   }
 
-  draw(g) {
+  paintBg(g) {
     const bg = g.createLinearGradient(0, 0, W, H);
     bg.addColorStop(0, '#102434');
     bg.addColorStop(1, '#0b0a22');
     g.fillStyle = bg;
     g.fillRect(0, 0, W, H);
-    // baloncuklar
-    for (let i = 0; i < 26; i++) {
-      const x = (i * 137) % W;
-      const y = H - ((this.time * (20 + (i % 5) * 8) + i * 90) % (H + 40));
-      g.strokeStyle = 'rgba(120,220,255,.08)';
-      g.lineWidth = 2;
+    for (const p of [0, 1]) {
+      const x0 = BX[p];
+      const col = PCOL[p];
+      const nx0 = x0 + 2.5 * CELL;
+      const nx1 = x0 + 5.5 * CELL;
+      g.save();
+      g.shadowColor = col;
+      g.shadowBlur = 24;
+      g.lineWidth = 8;
+      g.strokeStyle = shade(col, -0.2);
       g.beginPath();
-      g.arc(x, y, 4 + (i % 4) * 3, 0, Math.PI * 2);
+      g.moveTo(nx0, BY - 46);
+      g.lineTo(nx0, BY - 10);
+      g.lineTo(x0 - 6, BY - 10);
+      g.lineTo(x0 - 6, BY + BH + 6);
+      g.quadraticCurveTo(x0 - 6, BY + BH + 12, x0, BY + BH + 12);
+      g.lineTo(x0 + BW, BY + BH + 12);
+      g.quadraticCurveTo(x0 + BW + 6, BY + BH + 12, x0 + BW + 6, BY + BH + 6);
+      g.lineTo(x0 + BW + 6, BY - 10);
+      g.lineTo(nx1, BY - 10);
+      g.lineTo(nx1, BY - 46);
       g.stroke();
+      g.restore();
+      g.fillStyle = 'rgba(14,12,40,.92)';
+      g.fillRect(x0 - 2, BY - 6, BW + 4, BH + 14);
+      g.fillRect(nx0 + 4, BY - 44, nx1 - nx0 - 8, 40);
+      g.fillStyle = 'rgba(255,255,255,.04)';
+      g.fillRect(x0 + 6, BY, 10, BH);
+      g.fillStyle = 'rgba(255,255,255,.05)';
+      for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) g.fillRect(x0 + x * CELL + CELL / 2 - 1, BY + y * CELL + CELL / 2 - 1, 2, 2);
+      text(g, this.api.players[p].name, x0 + BW / 2, 34, { size: 36, color: col, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 6 });
+      const qx = QX[p];
+      rr(g, qx, BY, 96, 104, 14);
+      g.fillStyle = 'rgba(255,255,255,.05)';
+      g.fill();
+      text(g, 'SIRADA', qx + 48, BY + 20, { size: 18, color: '#a7a2d1' });
+      rr(g, qx, BY + 124, 96, 120, 14);
+      g.fillStyle = 'rgba(255,255,255,.05)';
+      g.fill();
+      text(g, 'MİKROP', qx + 48, BY + 146, { size: 18, color: '#a7a2d1' });
     }
-    this.bottles.forEach((b) => b.draw(g, this.time));
-
     const cx = W / 2;
-    text(g, `RAUNT ${this.round}`, cx, 150, { size: 30, color: '#a7a2d1', weight: 800 });
-    text(g, `${this.wins[0]}`, cx - 50, 220, { size: 80, color: PCOL[0], weight: 800 });
-    text(g, '–', cx, 216, { size: 60, color: '#57538a', weight: 800 });
-    text(g, `${this.wins[1]}`, cx + 50, 220, { size: 80, color: PCOL[1], weight: 800 });
     text(g, 'Mikroplarını ilk', cx, 320, { size: 22, color: '#e6e2ff', weight: 700 });
     text(g, 'bitiren kazanır!', cx, 348, { size: 22, color: '#e6e2ff', weight: 700 });
     text(g, 'Aynı renkten 4 tane', cx, 430, { size: 17, color: '#6f8ba3', weight: 600 });
@@ -663,6 +662,29 @@ class CapsuleGame {
     text(g, '→ silinir', cx, 478, { size: 17, color: '#6f8ba3', weight: 600 });
     text(g, 'İki grup birden silersen', cx, 540, { size: 17, color: '#6f8ba3', weight: 600 });
     text(g, 'rakibe kapsül yağar', cx, 564, { size: 17, color: '#6f8ba3', weight: 600 });
+  }
+
+  draw(g) {
+    this.bg.draw(g);
+    // yükselen baloncuklar (ucuz çizgiler)
+    g.strokeStyle = 'rgba(120,220,255,.08)';
+    g.lineWidth = 2;
+    g.beginPath();
+    for (let i = 0; i < 16; i++) {
+      const x = (i * 211) % W;
+      const y = H - ((this.time * (20 + (i % 5) * 8) + i * 90) % (H + 40));
+      const r = 4 + (i % 4) * 3;
+      g.moveTo(x + r, y);
+      g.arc(x, y, r, 0, Math.PI * 2);
+    }
+    g.stroke();
+    this.bottles.forEach((b) => b.draw(g, this.time));
+
+    const cx = W / 2;
+    text(g, `RAUNT ${this.round}`, cx, 150, { size: 30, color: '#a7a2d1', weight: 800 });
+    text(g, `${this.wins[0]}`, cx - 50, 220, { size: 80, color: PCOL[0], weight: 800 });
+    text(g, '–', cx, 216, { size: 60, color: '#57538a', weight: 800 });
+    text(g, `${this.wins[1]}`, cx + 50, 220, { size: 80, color: PCOL[1], weight: 800 });
 
     this.parts.draw(g);
     this.pops.draw(g);
@@ -683,6 +705,7 @@ export default {
   icon: '💊',
   tag: 'Renk eşleştirme',
   mode: 'versus',
+  cat: 'bulmaca',
   color: '#2bb3a3',
   desc: 'Şişene düşen iki renkli kapsülleri yerleştir. Aynı renkten 4 tanesi yan yana ya da üst üste gelince silinir. Mikroplarını ilk temizleyen kazanır!',
   howto: ['◀ ▶ kapsülü kaydır', '▼ hızlı indir', 'A / ▲ sağa, B sola döndür', 'İki grup birden silersen rakibine kapsül yağar', '3 rauntta 2 alan kazanır'],

@@ -1,6 +1,6 @@
 // BOMBA ARENASI — labirentte bomba bırak, kutuları patlat, güçlen, rakibini yakala.
 // 5 rauntta 3 alan kazanır. Süre bitince arena daralır.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, winDots, shade, rgba } from '../host/gfx.js';
+import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, winDots, shade, rgba, sprite, Layer, glow } from '../host/gfx.js';
 
 const C = 15;
 const R = 13;
@@ -22,11 +22,9 @@ const ITEM_NAME = { bomb: '+1 BOMBA', fire: '+1 ALEV', speed: '+HIZ' };
 const key = (x, y) => y * C + x;
 
 // ------------------------------------------------------------------ çizim parçaları
-export function drawBombIcon(g, x, y, s, t = 0) {
-  const pulse = 1 + Math.sin(t * 14) * 0.06;
+export function paintBomb(g, x, y, s) {
   g.save();
   g.translate(x, y);
-  g.scale(pulse, pulse);
   g.fillStyle = 'rgba(0,0,0,.25)';
   g.beginPath();
   g.ellipse(0, s * 0.42, s * 0.38, s * 0.1, 0, 0, Math.PI * 2);
@@ -46,12 +44,6 @@ export function drawBombIcon(g, x, y, s, t = 0) {
   g.moveTo(0, -s * 0.36);
   g.quadraticCurveTo(s * 0.12, -s * 0.52, s * 0.24, -s * 0.44);
   g.stroke();
-  if (t > 0) {
-    g.fillStyle = Math.floor(t * 20) % 2 ? '#ffd23f' : '#ff7a3d';
-    g.beginPath();
-    g.arc(s * 0.26, -s * 0.46, s * 0.08 + Math.random() * s * 0.04, 0, Math.PI * 2);
-    g.fill();
-  }
   g.fillStyle = 'rgba(255,255,255,.35)';
   g.beginPath();
   g.ellipse(-s * 0.13, -s * 0.08, s * 0.08, s * 0.05, -0.6, 0, Math.PI * 2);
@@ -59,7 +51,7 @@ export function drawBombIcon(g, x, y, s, t = 0) {
   g.restore();
 }
 
-function drawFlameIcon(g, x, y, s) {
+function paintFlame(g, x, y, s) {
   g.save();
   g.translate(x, y);
   g.fillStyle = '#ffb02e';
@@ -77,7 +69,7 @@ function drawFlameIcon(g, x, y, s) {
   g.restore();
 }
 
-function drawBoltIcon(g, x, y, s) {
+function paintBolt(g, x, y, s) {
   g.save();
   g.translate(x, y);
   g.fillStyle = '#fff36b';
@@ -96,35 +88,63 @@ function drawBoltIcon(g, x, y, s) {
   g.restore();
 }
 
-function drawItem(g, type, x, y, s, t) {
-  const bob = Math.sin(t * 4) * 2;
-  g.save();
-  g.shadowColor = ITEM_COL[type];
-  g.shadowBlur = 14;
-  rr(g, x - s * 0.4, y - s * 0.4 + bob, s * 0.8, s * 0.8, s * 0.18);
-  g.fillStyle = ITEM_COL[type];
-  g.fill();
-  g.restore();
-  rr(g, x - s * 0.4, y - s * 0.4 + bob, s * 0.8, s * 0.8, s * 0.18);
-  g.strokeStyle = 'rgba(255,255,255,.7)';
-  g.lineWidth = 2.5;
-  g.stroke();
-  if (type === 'bomb') drawBombIcon(g, x, y + bob + 2, s * 0.62);
-  else if (type === 'fire') drawFlameIcon(g, x, y + bob, s * 0.7);
-  else drawBoltIcon(g, x, y + bob, s * 0.75);
+function itemSprite(type, s = T) {
+  const pad = 12;
+  return sprite(`bitem|${type}|${s}`, s + pad * 2, s + pad * 2, (g) => {
+    const c = s / 2 + pad;
+    g.save();
+    g.shadowColor = ITEM_COL[type];
+    g.shadowBlur = 14;
+    rr(g, c - s * 0.4, c - s * 0.4, s * 0.8, s * 0.8, s * 0.18);
+    g.fillStyle = ITEM_COL[type];
+    g.fill();
+    g.restore();
+    rr(g, c - s * 0.4, c - s * 0.4, s * 0.8, s * 0.8, s * 0.18);
+    g.strokeStyle = 'rgba(255,255,255,.7)';
+    g.lineWidth = 2.5;
+    g.stroke();
+    if (type === 'bomb') paintBomb(g, c, c + 2, s * 0.62);
+    else if (type === 'fire') paintFlame(g, c, c, s * 0.7);
+    else paintBolt(g, c, c, s * 0.75);
+  });
 }
 
+function bombSprite() {
+  return sprite('bbomb', T, T, (g) => paintBomb(g, T / 2, T / 2, T * 0.95));
+}
+
+function crateSprite() {
+  return sprite('bcrate', T + 8, T + 8, (g) => {
+    g.fillStyle = 'rgba(0,0,0,.22)';
+    g.fillRect(6, 8, T - 4, T - 4);
+    const grad = g.createLinearGradient(0, 0, 0, T);
+    grad.addColorStop(0, '#d29a5c');
+    grad.addColorStop(1, '#99602f');
+    rr(g, 3, 3, T - 6, T - 6, 6);
+    g.fillStyle = grad;
+    g.fill();
+    g.strokeStyle = '#6b3f1c';
+    g.lineWidth = 3;
+    g.stroke();
+    g.beginPath();
+    g.moveTo(9, 9);
+    g.lineTo(T - 9, T - 9);
+    g.moveTo(T - 9, 9);
+    g.lineTo(9, T - 9);
+    g.stroke();
+  });
+}
+
+// Oyun karakteri (başka oyunlar da kullanabilir)
 export function drawGuy(g, x, y, s, color, face = [0, 1], walk = 0, alpha = 1, squash = 0) {
   g.save();
-  g.globalAlpha = alpha;
+  g.globalAlpha *= alpha;
   g.translate(x, y);
   const bounce = Math.abs(Math.sin(walk * 10)) * s * 0.06;
-  // gölge
   g.fillStyle = 'rgba(0,0,0,.28)';
   g.beginPath();
   g.ellipse(0, s * 0.4, s * 0.34, s * 0.1, 0, 0, Math.PI * 2);
   g.fill();
-  // ayaklar
   const step = Math.sin(walk * 10) * s * 0.08;
   g.fillStyle = shade(color, -0.55);
   g.beginPath();
@@ -133,7 +153,6 @@ export function drawGuy(g, x, y, s, color, face = [0, 1], walk = 0, alpha = 1, s
   g.fill();
   g.translate(0, -bounce);
   g.scale(1 + squash, 1 - squash);
-  // yaprak filizi
   g.strokeStyle = '#2a8a4a';
   g.lineWidth = s * 0.05;
   g.beginPath();
@@ -144,7 +163,6 @@ export function drawGuy(g, x, y, s, color, face = [0, 1], walk = 0, alpha = 1, s
   g.beginPath();
   g.ellipse(s * 0.15, -s * 0.52, s * 0.1, s * 0.05, -0.5, 0, Math.PI * 2);
   g.fill();
-  // gövde
   const grad = g.createLinearGradient(0, -s * 0.4, 0, s * 0.35);
   grad.addColorStop(0, shade(color, 0.25));
   grad.addColorStop(1, shade(color, -0.3));
@@ -154,12 +172,9 @@ export function drawGuy(g, x, y, s, color, face = [0, 1], walk = 0, alpha = 1, s
   g.strokeStyle = shade(color, -0.55);
   g.lineWidth = s * 0.04;
   g.stroke();
-  // yüz
   const lx = face[0] * s * 0.08;
   const ly = face[1] * s * 0.05;
-  if (face[1] < 0 && !face[0]) {
-    // arkası dönük: göz yok, sadece parlama
-  } else {
+  if (!(face[1] < 0 && !face[0])) {
     for (const sx of [-1, 1]) {
       g.fillStyle = '#fff';
       g.beginPath();
@@ -183,6 +198,15 @@ export function drawGuy(g, x, y, s, color, face = [0, 1], walk = 0, alpha = 1, s
   g.restore();
 }
 
+// karakterin önceden çizilmiş kareleri: renk × yön × adım
+const FACES = [[0, 1], [0, -1], [-1, 0], [1, 0]];
+export function guySprite(color, faceIdx, frame, s = 56) {
+  return sprite(`guy|${color}|${faceIdx}|${frame}|${s}`, s * 1.3, s * 1.4, (g) => {
+    drawGuy(g, s * 0.65, s * 0.78, s, color, FACES[faceIdx], (frame * Math.PI) / 20);
+  });
+}
+const faceIndex = (f) => (f[1] > 0 ? 0 : f[1] < 0 ? 1 : f[0] < 0 ? 2 : 3);
+
 // ------------------------------------------------------------------ oyun
 class BomberGame {
   constructor(api) {
@@ -193,6 +217,8 @@ class BomberGame {
     this.parts = new Particles();
     this.pops = new Popups();
     this.shake = new Shake();
+    this.bg = new Layer(C * T, R * T, (g) => this.paintField(g));
+    this.panels = new Layer(W, H, (g) => this.paintPanels(g));
     this.newRound();
   }
 
@@ -208,7 +234,7 @@ class BomberGame {
     this.clock = ROUND_TIME;
     this.sd = null;
     const safe = new Set([key(1, 1), key(2, 1), key(1, 2), key(C - 2, R - 2), key(C - 3, R - 2), key(C - 2, R - 3)]);
-    const types = [];
+    const softs = [];
     for (let y = 0; y < R; y++) {
       const row = [];
       for (let x = 0; x < C; x++) {
@@ -216,33 +242,31 @@ class BomberGame {
         if (x === 0 || y === 0 || x === C - 1 || y === R - 1 || (x % 2 === 0 && y % 2 === 0)) v = HARD;
         else if (!safe.has(key(x, y)) && Math.random() < 0.72) v = SOFT;
         row.push(v);
-        if (v === SOFT) types.push(key(x, y));
+        if (v === SOFT) softs.push(key(x, y));
       }
       this.map.push(row);
     }
-    // eşya dağıtımı (dengeli)
-    types.sort(() => Math.random() - 0.5);
+    softs.sort(() => Math.random() - 0.5);
     const pool = [...Array(9).fill('bomb'), ...Array(9).fill('fire'), ...Array(5).fill('speed')];
-    pool.forEach((t, i) => types[i] !== undefined && this.hidden.set(types[i], t));
+    pool.forEach((t, i) => softs[i] !== undefined && this.hidden.set(softs[i], t));
 
-    this.players = [
-      this.mkPlayer(0, 1, 1, [0, 1]),
-      this.mkPlayer(1, C - 2, R - 2, [0, -1]),
-    ];
+    this.players = [this.mkPlayer(0, 1, 1, [0, 1]), this.mkPlayer(1, C - 2, R - 2, [0, -1])];
     this.phase = this.round === 1 ? 'play' : 'intro';
     this.phaseT = 2;
     this.roundWinner = null;
-    this.bg = null;
+    this.bg.invalidate();
+    this.panels.invalidate();
     for (const p of [0, 1]) this.api.info(p, `Raunt ${this.round} · ${this.wins[0]} - ${this.wins[1]}`);
   }
 
   mkPlayer(p, x, y, face) {
-    return { p, x, y, face, alive: true, bombs: 1, range: 2, speed: 3.6, spd: 0, active: 0, pass: new Set(), walk: 0, moving: false, deathT: 0 };
+    return { p, x, y, face, alive: true, bombs: 1, range: 2, speed: 3.6, spd: 0, active: 0, pass: new Set(), walk: 0, moving: false, deathT: 0, last: 'h' };
   }
 
   // ---------------------------------------------------------------- hareket
   bombAt(x, y) {
-    return this.bombs.find((b) => b.x === x && b.y === y);
+    for (const b of this.bombs) if (b.x === x && b.y === y) return b;
+    return null;
   }
 
   blocked(x, y, pl) {
@@ -252,6 +276,7 @@ class BomberGame {
     return !!(b && !pl.pass.has(b));
   }
 
+  // Izgaraya hizalı hareket + köşe kaydırma (koridorlara kolay girmek için)
   tryMove(pl, dx, dy, step) {
     if (!dx && !dy) return false;
     const hor = dx !== 0;
@@ -347,9 +372,7 @@ class BomberGame {
         }
       }
     }
-    const cx = X0 + (b.x + 0.5) * T;
-    const cy = Y0 + (b.y + 0.5) * T;
-    this.parts.burst(cx, cy, 18, ['#ffd23f', '#ff7a3d', '#ff4f2d', '#fff3b0'], { speed: 360, life: 0.6, size: 9, gravity: -100 });
+    this.parts.burst(X0 + (b.x + 0.5) * T, Y0 + (b.y + 0.5) * T, 16, ['#ffd23f', '#ff7a3d', '#ff4f2d', '#fff3b0'], { speed: 360, life: 0.55, size: 9, gravity: -100 });
     this.shake.add(7, 0.25);
     this.api.sfx('boom');
   }
@@ -358,10 +381,11 @@ class BomberGame {
     if (!pl.alive) return;
     pl.alive = false;
     pl.deathT = 0;
-    this.parts.burst(X0 + (pl.x + 0.5) * T, Y0 + (pl.y + 0.5) * T, 30, [PCOL[pl.p], '#fff', shade(PCOL[pl.p], -0.4)], { speed: 380, size: 9, life: 1 });
+    this.parts.burst(X0 + (pl.x + 0.5) * T, Y0 + (pl.y + 0.5) * T, 28, [PCOL[pl.p], '#fff', shade(PCOL[pl.p], -0.4)], { speed: 380, size: 9, life: 1 });
     this.shake.add(10, 0.4);
     this.api.sfx('die');
     this.api.buzz(pl.p, 400);
+    this.panels.invalidate();
   }
 
   startSuddenDeath() {
@@ -386,16 +410,19 @@ class BomberGame {
       sd.t += 0.32;
       const [x, y] = sd.order[sd.i++];
       this.map[y][x] = HARD;
-      this.items.delete(key(x, y));
-      this.hidden.delete(key(x, y));
+      const k = key(x, y);
+      this.items.delete(k);
+      this.hidden.delete(k);
+      this.fires.delete(k);
       this.breaking = this.breaking.filter((b) => b.x !== x || b.y !== y);
       const bomb = this.bombAt(x, y);
       if (bomb) {
         this.bombs.splice(this.bombs.indexOf(bomb), 1);
         this.players[bomb.owner].active--;
+        for (const pl of this.players) pl.pass.delete(bomb);
       }
       this.drops.push({ x, y, t: 0.25 });
-      this.bg = null;
+      this.paintWall(this.bg.ctx(), x, y);
       for (const pl of this.players) if (pl.alive && Math.round(pl.x) === x && Math.round(pl.y) === y) this.kill(pl);
       this.api.sfx('lock');
     }
@@ -403,9 +430,10 @@ class BomberGame {
 
   // ---------------------------------------------------------------- güncelleme
   onKey(p, k, down) {
-    if (down && (k === 'left' || k === 'right')) this.players[p].last = 'h';
-    if (down && (k === 'up' || k === 'down')) this.players[p].last = 'v';
-    if (down && (k === 'a' || k === 'b') && (this.phase === 'play' || this.phase === 'settle')) this.placeBomb(this.players[p]);
+    const pl = this.players[p];
+    if (down && (k === 'left' || k === 'right')) pl.last = 'h';
+    if (down && (k === 'up' || k === 'down')) pl.last = 'v';
+    if (down && (k === 'a' || k === 'b') && (this.phase === 'play' || this.phase === 'settle')) this.placeBomb(pl);
   }
 
   updatePlayer(pl, dt) {
@@ -426,7 +454,6 @@ class BomberGame {
     const step = pl.speed * dt;
     const tries = [];
     if (dx && dy) {
-      // iki yön birden: en son basılan yönü önce dene (köşe dönüşü)
       if (pl.last === 'v') tries.push([0, dy], [dx, 0]);
       else tries.push([dx, 0], [0, dy]);
     } else if (dx) tries.push([dx, 0]);
@@ -443,7 +470,6 @@ class BomberGame {
     pl.moving = moved;
     if (moved) pl.walk += dt;
     for (const b of pl.pass) if (Math.abs(pl.x - b.x) >= 0.95 || Math.abs(pl.y - b.y) >= 0.95) pl.pass.delete(b);
-    // eşya toplama
     const k = key(Math.round(pl.x), Math.round(pl.y));
     const it = this.items.get(k);
     if (it) {
@@ -465,8 +491,10 @@ class BomberGame {
     this.parts.update(dt);
     this.pops.update(dt);
     this.shake.update(dt);
-    for (const d of this.drops) d.t -= dt;
-    this.drops = this.drops.filter((d) => d.t > 0);
+    if (this.drops.length) {
+      for (const d of this.drops) d.t -= dt;
+      this.drops = this.drops.filter((d) => d.t > 0);
+    }
 
     if (this.phase === 'intro') {
       this.phaseT -= dt;
@@ -492,24 +520,28 @@ class BomberGame {
 
     for (const pl of this.players) this.updatePlayer(pl, dt);
 
-    for (const b of [...this.bombs]) {
-      b.t -= dt;
-      if (b.t <= 0) this.explode(b);
+    if (this.bombs.length) {
+      for (const b of [...this.bombs]) {
+        b.t -= dt;
+        if (b.t <= 0) this.explode(b);
+      }
     }
     for (const [k, f] of this.fires) {
       f.t -= dt;
       if (f.t <= 0) this.fires.delete(k);
     }
-    for (const br of this.breaking) {
-      br.t -= dt;
-      if (br.t <= 0) {
-        this.map[br.y][br.x] = EMPTY;
-        const it = this.hidden.get(key(br.x, br.y));
-        if (it) this.items.set(key(br.x, br.y), it);
-        this.parts.burst(X0 + (br.x + 0.5) * T, Y0 + (br.y + 0.5) * T, 8, ['#a4673a', '#7a4a26', '#d39a5e'], { speed: 180, size: 7 });
+    if (this.breaking.length) {
+      for (const br of this.breaking) {
+        br.t -= dt;
+        if (br.t <= 0) {
+          this.map[br.y][br.x] = EMPTY;
+          const it = this.hidden.get(key(br.x, br.y));
+          if (it) this.items.set(key(br.x, br.y), it);
+          this.parts.burst(X0 + (br.x + 0.5) * T, Y0 + (br.y + 0.5) * T, 7, ['#a4673a', '#7a4a26', '#d39a5e'], { speed: 180, size: 7 });
+        }
       }
+      this.breaking = this.breaking.filter((b) => b.t > 0);
     }
-    this.breaking = this.breaking.filter((b) => b.t > 0);
 
     for (const pl of this.players) {
       if (pl.alive && this.fires.has(key(Math.round(pl.x), Math.round(pl.y)))) this.kill(pl);
@@ -526,136 +558,72 @@ class BomberGame {
         if (this.roundWinner !== null) this.wins[this.roundWinner]++;
         this.phase = 'result';
         this.phaseT = 2.6;
+        this.panels.invalidate();
         this.api.sfx(this.roundWinner === null ? 'lose' : 'power');
       }
     }
   }
 
   // ---------------------------------------------------------------- çizim
-  renderBg() {
-    const cv = document.createElement('canvas');
-    cv.width = C * T;
-    cv.height = R * T;
-    const g = cv.getContext('2d');
+  paintWall(g, x, y) {
+    const px = x * T;
+    const py = y * T;
+    g.fillStyle = 'rgba(0,0,0,.25)';
+    g.fillRect(px + 6, py + 8, T - 6, T - 8);
+    const grad = g.createLinearGradient(px, py, px, py + T);
+    grad.addColorStop(0, '#8d93b8');
+    grad.addColorStop(1, '#585e85');
+    rr(g, px + 2, py + 2, T - 4, T - 4, 9);
+    g.fillStyle = grad;
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,.22)';
+    rr(g, px + 7, py + 6, T - 14, 8, 4);
+    g.fill();
+    g.strokeStyle = 'rgba(30,30,60,.5)';
+    g.lineWidth = 2;
+    rr(g, px + 2, py + 2, T - 4, T - 4, 9);
+    g.stroke();
+  }
+
+  paintField(g) {
     for (let y = 0; y < R; y++) {
       for (let x = 0; x < C; x++) {
         g.fillStyle = (x + y) % 2 ? '#3c8a4e' : '#429556';
         g.fillRect(x * T, y * T, T, T);
       }
     }
-    // çim tutamları
     g.fillStyle = 'rgba(255,255,255,.06)';
-    for (let i = 0; i < 160; i++) {
-      const x = (i * 97) % (C * T);
-      const y = (i * 53 + (i % 7) * 31) % (R * T);
-      g.fillRect(x, y, 3, 6);
-    }
-    for (let y = 0; y < R; y++) {
-      for (let x = 0; x < C; x++) {
-        if (this.map[y][x] !== HARD) continue;
-        // gölge
-        g.fillStyle = 'rgba(0,0,0,.25)';
-        g.fillRect(x * T + 6, y * T + 8, T, T);
-      }
-    }
-    for (let y = 0; y < R; y++) {
-      for (let x = 0; x < C; x++) {
-        if (this.map[y][x] !== HARD) continue;
-        const px = x * T;
-        const py = y * T;
-        const grad = g.createLinearGradient(px, py, px, py + T);
-        grad.addColorStop(0, '#8d93b8');
-        grad.addColorStop(1, '#585e85');
-        rr(g, px + 2, py + 2, T - 4, T - 4, 9);
-        g.fillStyle = grad;
-        g.fill();
-        g.fillStyle = 'rgba(255,255,255,.22)';
-        rr(g, px + 7, py + 6, T - 14, 8, 4);
-        g.fill();
-        g.strokeStyle = 'rgba(30,30,60,.5)';
-        g.lineWidth = 2;
-        rr(g, px + 2, py + 2, T - 4, T - 4, 9);
-        g.stroke();
-      }
-    }
-    this.bg = cv;
+    for (let i = 0; i < 160; i++) g.fillRect((i * 97) % (C * T), (i * 53 + (i % 7) * 31) % (R * T), 3, 6);
+    for (let y = 0; y < R; y++) for (let x = 0; x < C; x++) if (this.map[y][x] === HARD) this.paintWall(g, x, y);
   }
 
-  drawCrate(g, x, y, burn = 0) {
-    const px = X0 + x * T;
-    const py = Y0 + y * T;
-    g.save();
-    if (burn) g.globalAlpha = 0.3 + 0.7 * burn;
-    g.fillStyle = 'rgba(0,0,0,.22)';
-    g.fillRect(px + 6, py + 8, T - 4, T - 4);
-    const grad = g.createLinearGradient(px, py, px, py + T);
-    grad.addColorStop(0, burn ? '#ff9a3d' : '#d29a5c');
-    grad.addColorStop(1, burn ? '#a33a12' : '#99602f');
-    rr(g, px + 3, py + 3, T - 6, T - 6, 6);
-    g.fillStyle = grad;
-    g.fill();
-    g.strokeStyle = '#6b3f1c';
-    g.lineWidth = 3;
-    g.stroke();
-    g.beginPath();
-    g.moveTo(px + 9, py + 9);
-    g.lineTo(px + T - 9, py + T - 9);
-    g.moveTo(px + T - 9, py + 9);
-    g.lineTo(px + 9, py + T - 9);
-    g.stroke();
-    g.restore();
-  }
-
-  drawFire(g, f) {
-    const px = X0 + f.x * T;
-    const py = Y0 + f.y * T;
-    const a = Math.min(1, f.t / FIRE_T * 1.6);
-    const flick = 1 + Math.sin(this.time * 50 + f.x * 3 + f.y) * 0.06;
-    g.save();
-    g.globalAlpha = a;
-    g.translate(px + T / 2, py + T / 2);
-    g.scale(flick, flick);
-    const layers = [['#ff4f2d', 0.5], ['#ffa62d', 0.36], ['#fff3b0', 0.2]];
-    for (const [col, w] of layers) {
-      g.fillStyle = col;
-      if (f.kind === 'h') g.fillRect(-T / 2, -T * w, T, T * w * 2);
-      else if (f.kind === 'v') g.fillRect(-T * w, -T / 2, T * w * 2, T);
-      else {
-        rr(g, -T * (w + 0.06), -T * (w + 0.06), T * (w + 0.06) * 2, T * (w + 0.06) * 2, T * 0.25);
-        g.fill();
-      }
-    }
-    g.restore();
-  }
-
-  drawPanel(g, p) {
-    const pl = this.players[p];
-    const cx = p === 0 ? 125 : W - 125;
-    const col = PCOL[p];
-    rr(g, cx - 110, 22, 220, 676, 22);
-    g.fillStyle = rgba(col, 0.1);
-    g.fill();
-    g.strokeStyle = rgba(col, 0.45);
-    g.lineWidth = 2;
-    g.stroke();
-    text(g, this.api.players[p].name, cx, 68, { size: 34, color: col, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 6 });
-    winDots(g, cx, 106, this.wins[p], NEED, col);
-    drawGuy(g, cx, 196, 110, col, [0, 1], pl.alive ? this.time * 0.25 : 0, pl.alive ? 1 : 0.35);
-    if (!pl.alive) text(g, 'YANDI!', cx, 196, { size: 32, color: '#ff6b7a', weight: 800, stroke: '#1a0a14', sw: 6 });
-    const rows = [['bomb', pl.bombs, 'BOMBA'], ['fire', pl.range, 'ALEV'], ['speed', pl.spd + 1, 'HIZ']];
-    rows.forEach(([t, v, label], i) => {
-      const y = 300 + i * 92;
-      rr(g, cx - 90, y, 180, 76, 16);
-      g.fillStyle = 'rgba(0,0,0,.25)';
+  paintPanels(g) {
+    g.fillStyle = '#0e1a14';
+    g.fillRect(0, 0, W, H);
+    for (const p of [0, 1]) {
+      const pl = this.players[p];
+      const cx = p === 0 ? 125 : W - 125;
+      const col = PCOL[p];
+      rr(g, cx - 110, 22, 220, 676, 22);
+      g.fillStyle = rgba(col, 0.1);
       g.fill();
-      drawItem(g, t, cx - 50, y + 38, 54, 0);
-      text(g, label, cx + 30, y + 24, { size: 17, color: '#a7a2d1' });
-      text(g, String(v), cx + 30, y + 52, { size: 34, color: '#fff', weight: 800 });
-    });
-    const m = Math.max(0, Math.ceil(this.clock));
-    const sd = !!this.sd;
-    text(g, sd ? 'ARENA' : 'SÜRE', cx, 600, { size: 18, color: sd ? '#ff6b7a' : '#a7a2d1' });
-    text(g, sd ? 'DARALIYOR' : `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`, cx, 640, { size: sd ? 28 : 40, color: sd ? '#ff6b7a' : m <= 10 ? '#ffd23f' : '#fff', weight: 800 });
+      g.strokeStyle = rgba(col, 0.45);
+      g.lineWidth = 2;
+      g.stroke();
+      text(g, this.api.players[p].name, cx, 68, { size: 34, color: col, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 6 });
+      winDots(g, cx, 106, this.wins[p], NEED, col);
+      drawGuy(g, cx, 196, 110, pl.alive ? col : '#555', [0, 1], 0, pl.alive ? 1 : 0.5);
+      if (!pl.alive) text(g, 'YANDI!', cx, 196, { size: 32, color: '#ff6b7a', weight: 800, stroke: '#1a0a14', sw: 6 });
+      ['bomb', 'fire', 'speed'].forEach((t, i) => {
+        const y = 300 + i * 92;
+        rr(g, cx - 90, y, 180, 76, 16);
+        g.fillStyle = 'rgba(0,0,0,.25)';
+        g.fill();
+        const spr = itemSprite(t, 54);
+        g.drawImage(spr, cx - 50 - spr.lw / 2, y + 38 - spr.lh / 2, spr.lw, spr.lh);
+        text(g, ['BOMBA', 'ALEV', 'HIZ'][i], cx + 30, y + 24, { size: 17, color: '#a7a2d1' });
+      });
+    }
   }
 
   demo() {
@@ -673,49 +641,101 @@ class BomberGame {
   }
 
   draw(g) {
-    g.fillStyle = '#0e1a14';
-    g.fillRect(0, 0, W, H);
+    this.panels.draw(g);
     g.save();
     this.shake.apply(g);
-    if (!this.bg) this.renderBg();
-    g.drawImage(this.bg, X0, Y0);
+    this.bg.draw(g, X0, Y0);
 
-    for (const [k, it] of this.items) drawItem(g, it, X0 + ((k % C) + 0.5) * T, Y0 + (Math.floor(k / C) + 0.5) * T, T, this.time);
-    for (let y = 0; y < R; y++) for (let x = 0; x < C; x++) if (this.map[y][x] === SOFT) this.drawCrate(g, x, y);
-    for (const br of this.breaking) this.drawCrate(g, br.x, br.y, br.t / 0.45);
+    for (const [k, it] of this.items) {
+      const spr = itemSprite(it);
+      const bob = Math.sin(this.time * 4) * 2;
+      g.drawImage(spr, X0 + ((k % C) + 0.5) * T - spr.lw / 2, Y0 + (Math.floor(k / C) + 0.5) * T - spr.lh / 2 + bob, spr.lw, spr.lh);
+    }
+    const crate = crateSprite();
+    for (let y = 1; y < R - 1; y++) {
+      const row = this.map[y];
+      for (let x = 1; x < C - 1; x++) if (row[x] === SOFT) g.drawImage(crate, X0 + x * T, Y0 + y * T, crate.lw, crate.lh);
+    }
+    for (const br of this.breaking) {
+      const a = br.t / 0.45;
+      g.globalAlpha = 0.3 + 0.7 * a;
+      g.drawImage(crate, X0 + br.x * T, Y0 + br.y * T, crate.lw, crate.lh);
+      g.globalAlpha = 1;
+      g.fillStyle = `rgba(255,140,40,${0.5 * a})`;
+      g.fillRect(X0 + br.x * T + 3, Y0 + br.y * T + 3, T - 6, T - 6);
+    }
+    const bs = bombSprite();
     for (const b of this.bombs) {
-      const urgent = b.t < 0.8 ? 1.5 : 1;
-      drawBombIcon(g, X0 + (b.x + 0.5) * T, Y0 + (b.y + 0.5) * T, T * 0.95, (FUSE - b.t) * urgent + 0.01);
+      const cx = X0 + (b.x + 0.5) * T;
+      const cy = Y0 + (b.y + 0.5) * T;
+      const pulse = 1 + Math.sin((FUSE - b.t) * (b.t < 0.8 ? 21 : 14)) * 0.06;
+      const sz = T * pulse;
+      g.drawImage(bs, cx - sz / 2, cy - sz / 2, sz, sz);
+      // fitil kıvılcımı
+      g.fillStyle = Math.floor(this.time * 20) % 2 ? '#ffd23f' : '#ff7a3d';
+      g.beginPath();
+      g.arc(cx + T * 0.25 * pulse, cy - T * 0.42 * pulse, 4 + Math.random() * 2, 0, Math.PI * 2);
+      g.fill();
       if (b.t < 0.6 && Math.floor(b.t * 16) % 2) {
         g.fillStyle = 'rgba(255,80,60,.35)';
         g.beginPath();
-        g.arc(X0 + (b.x + 0.5) * T, Y0 + (b.y + 0.55) * T, T * 0.36, 0, Math.PI * 2);
+        g.arc(cx, cy + 3, T * 0.36, 0, Math.PI * 2);
         g.fill();
       }
     }
-    for (const f of this.fires.values()) this.drawFire(g, f);
+    // alevler: 3 renk katmanı, düz dikdörtgenler (ucuz)
+    const layers = [['#ff4f2d', 0.5], ['#ffa62d', 0.36], ['#fff3b0', 0.2]];
+    for (const f of this.fires.values()) {
+      const px = X0 + f.x * T + T / 2;
+      const py = Y0 + f.y * T + T / 2;
+      g.globalAlpha = Math.min(1, (f.t / FIRE_T) * 1.6);
+      const fl = 1 + Math.sin(this.time * 50 + f.x * 3 + f.y) * 0.06;
+      for (const [col, w0] of layers) {
+        const w = w0 * fl;
+        g.fillStyle = col;
+        if (f.kind === 'h') g.fillRect(px - T / 2, py - T * w, T, T * w * 2);
+        else if (f.kind === 'v') g.fillRect(px - T * w, py - T / 2, T * w * 2, T);
+        else {
+          const r = T * (w + 0.06);
+          rr(g, px - r, py - r, r * 2, r * 2, T * 0.25);
+          g.fill();
+        }
+      }
+    }
+    g.globalAlpha = 1;
     for (const d of this.drops) {
       const s = 1 + d.t * 3;
-      g.save();
-      g.translate(X0 + (d.x + 0.5) * T, Y0 + (d.y + 0.5) * T - d.t * 120);
-      g.scale(s, s);
-      rr(g, -T / 2 + 2, -T / 2 + 2, T - 4, T - 4, 9);
+      const sz = (T - 4) * s;
       g.fillStyle = '#8d93b8';
+      rr(g, X0 + (d.x + 0.5) * T - sz / 2, Y0 + (d.y + 0.5) * T - d.t * 120 - sz / 2, sz, sz, 9);
       g.fill();
-      g.restore();
     }
-    const order = [...this.players].sort((a, b) => a.y - b.y);
+    const order = this.players[0].y <= this.players[1].y ? this.players : [this.players[1], this.players[0]];
     for (const pl of order) {
       const px = X0 + (pl.x + 0.5) * T;
       const py = Y0 + (pl.y + 0.5) * T - 4;
-      if (pl.alive) drawGuy(g, px, py, T * 1.05, PCOL[pl.p], pl.face, pl.walk);
-      else if (pl.deathT < 1.2) drawGuy(g, px, py - pl.deathT * 30, T * 1.05, '#555', [0, 1], 0, 1 - pl.deathT / 1.2, -0.2);
+      if (pl.alive) {
+        const frame = pl.moving ? Math.floor(pl.walk * 13) % 4 : 0;
+        const spr = guySprite(PCOL[pl.p], faceIndex(pl.face), frame);
+        g.drawImage(spr, px - spr.lw / 2, py - spr.lh * 0.557, spr.lw, spr.lh);
+      } else if (pl.deathT < 1.2) {
+        drawGuy(g, px, py - pl.deathT * 30, T * 1.05, '#555', [0, 1], 0, 1 - pl.deathT / 1.2, -0.2);
+      }
     }
     this.parts.draw(g);
     g.restore();
     this.pops.draw(g);
-    this.drawPanel(g, 0);
-    this.drawPanel(g, 1);
+
+    // panellerin değişen kısımları
+    for (const p of [0, 1]) {
+      const pl = this.players[p];
+      const cx = p === 0 ? 125 : W - 125;
+      [pl.bombs, pl.range, pl.spd + 1].forEach((v, i) => text(g, String(v), cx + 30, 300 + i * 92 + 52, { size: 34, color: '#fff', weight: 800 }));
+      const m = Math.max(0, Math.ceil(this.clock));
+      const sd = !!this.sd;
+      text(g, sd ? 'ARENA' : 'SÜRE', cx, 600, { size: 18, color: sd ? '#ff6b7a' : '#a7a2d1' });
+      text(g, sd ? 'DARALIYOR' : `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`, cx, 640, { size: sd ? 28 : 40, color: sd ? '#ff6b7a' : m <= 10 ? '#ffd23f' : '#fff', weight: 800 });
+    }
 
     if (this.phase === 'intro') banner(g, `RAUNT ${this.round}`, `${this.wins[0]} - ${this.wins[1]}  ·  ${NEED} raunt alan kazanır`, '#ffd23f', 2 - this.phaseT);
     if (this.phase === 'result') {
@@ -732,6 +752,7 @@ export default {
   icon: '💣',
   tag: 'Labirent savaşı',
   mode: 'versus',
+  cat: 'aksiyon',
   color: '#ff7a3d',
   desc: 'Bomba bırakıp tahta kutuları patlat, çıkan güçlendirmeleri topla ve rakibini alevlerin arasında yakala. Kendi bombana dikkat!',
   howto: ['Yön tuşları: yürü', 'A: bomba bırak', 'Mavi: +1 bomba · Turuncu: +1 alev · Yeşil: hız', 'Süre bitince arena daralır', '5 rauntta 3 alan kazanır'],

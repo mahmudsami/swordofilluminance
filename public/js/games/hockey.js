@@ -1,6 +1,6 @@
 // NEON HOKEY — masa hokeyi. Telefon ekranı senin yarı sahan: parmağını sürükle, diski rakip kaleye sok.
 // İlk 7 golü atan kazanır.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, clamp } from '../host/gfx.js';
+import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, shade, rgba, clamp, sprite, glow, Layer } from '../host/gfx.js';
 
 const L = 50;
 const R = 1230;
@@ -31,6 +31,7 @@ class HockeyGame {
     this.lastHit = -1;
     this.hitCool = 0;
     this.info();
+    this.table = new Layer(W, H, (g) => this.paintTable(g));
     api.setPad(0, { side: 'left' });
     api.setPad(1, { side: 'right' });
   }
@@ -165,6 +166,23 @@ class HockeyGame {
     if (hit && Math.hypot(p.vx, p.vy) > 150) this.api.sfx('bounce');
   }
 
+  // Disk duvara dayanmışken raket içine girdiyse raketi geri it (disk raketin içinden geçmesin)
+  unpin() {
+    const p = this.puck;
+    for (const m of this.mallets) {
+      const dx = p.x - m.x;
+      const dy = p.y - m.y;
+      const d = Math.hypot(dx, dy);
+      const min = MR + PR;
+      if (d >= min) continue;
+      const nx = d > 0 ? dx / d : m.p === 0 ? 1 : -1;
+      const ny = d > 0 ? dy / d : 0;
+      const [x0, x1, y0, y1] = this.bounds(m.p);
+      m.x = clamp(p.x - nx * min, x0, x1);
+      m.y = clamp(p.y - ny * min, y0, y1);
+    }
+  }
+
   goal(scorer) {
     this.score[scorer]++;
     this.phase = 'goal';
@@ -215,6 +233,7 @@ class HockeyGame {
       p.vy *= f;
       for (const m of this.mallets) this.collideMallet(m);
       this.wallCollide();
+      this.unpin();
       if (p.x < L - PR * 0.6) return this.goal(1);
       if (p.x > R + PR * 0.6) return this.goal(0);
     }
@@ -232,8 +251,17 @@ class HockeyGame {
     this.score = [3, 2];
   }
 
-  drawTable(g) {
-    // gövde
+  // Masa, isimler ve sabit yazılar tek katmanda (bir kez çizilir)
+  paintTable(g) {
+    g.fillStyle = '#081220';
+    g.fillRect(0, 0, W, H);
+    text(g, this.api.players[0].name, L + 10, 46, { size: 34, color: PCOL[0], weight: 800, align: 'left' });
+    text(g, this.api.players[1].name, R - 10, 46, { size: 34, color: PCOL[1], weight: 800, align: 'right' });
+    rr(g, MID - 120, 4, 240, 74, 20);
+    g.fillStyle = 'rgba(255,255,255,.06)';
+    g.fill();
+    text(g, ':', MID, 40, { size: 50, color: '#57538a', weight: 800 });
+    text(g, `ilk ${TARGET} gol kazanır`, MID, 88, { size: 16, color: '#7d97b8', weight: 700 });
     g.save();
     g.shadowColor = 'rgba(80,180,255,.45)';
     g.shadowBlur = 40;
@@ -247,15 +275,12 @@ class HockeyGame {
     rr(g, L, TOP, R - L, BOT - TOP, 22);
     g.fillStyle = grad;
     g.fill();
-    // hava delikleri
     g.fillStyle = 'rgba(160,220,255,.08)';
     for (let x = L + 30; x < R; x += 40) for (let y = TOP + 26; y < BOT; y += 40) g.fillRect(x, y, 3, 3);
-    // yarı sahalar renk
     g.fillStyle = rgba(PCOL[0], 0.05);
     g.fillRect(L, TOP, MID - L, BOT - TOP);
     g.fillStyle = rgba(PCOL[1], 0.05);
     g.fillRect(MID, TOP, R - MID, BOT - TOP);
-    // çizgiler
     g.save();
     g.shadowBlur = 14;
     g.lineWidth = 4;
@@ -277,7 +302,6 @@ class HockeyGame {
       g.stroke();
     }
     g.restore();
-    // kale ağızları
     for (const p of [0, 1]) {
       const gx = p === 0 ? L : R;
       g.save();
@@ -292,103 +316,104 @@ class HockeyGame {
     }
   }
 
-  drawMallet(g, m) {
-    const col = PCOL[m.p];
-    g.save();
-    g.translate(m.x, m.y);
-    g.fillStyle = 'rgba(0,0,0,.35)';
-    g.beginPath();
-    g.arc(5, 8, MR, 0, Math.PI * 2);
-    g.fill();
-    g.shadowColor = col;
-    g.shadowBlur = 20 + m.flash * 120;
-    const grad = g.createRadialGradient(-10, -12, 4, 0, 0, MR);
-    grad.addColorStop(0, shade(col, 0.4));
-    grad.addColorStop(1, shade(col, -0.25));
-    g.fillStyle = grad;
-    g.beginPath();
-    g.arc(0, 0, MR, 0, Math.PI * 2);
-    g.fill();
-    g.shadowBlur = 0;
-    g.strokeStyle = shade(col, -0.5);
-    g.lineWidth = 4;
-    g.beginPath();
-    g.arc(0, 0, MR * 0.62, 0, Math.PI * 2);
-    g.stroke();
-    g.fillStyle = shade(col, 0.15);
-    g.beginPath();
-    g.arc(0, 0, MR * 0.42, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = 'rgba(255,255,255,.45)';
-    g.beginPath();
-    g.ellipse(-8, -10, 9, 5, -0.6, 0, Math.PI * 2);
-    g.fill();
-    g.restore();
-    // dokunma hedefi
-    const s = this.api.input[m.p];
-    if (s.touch) {
-      g.strokeStyle = rgba(col, 0.35);
-      g.lineWidth = 2;
-      g.setLineDash([6, 6]);
-      g.beginPath();
-      g.arc(m.tx, m.ty, MR * 0.5, 0, Math.PI * 2);
-      g.stroke();
-      g.setLineDash([]);
-    }
-  }
-
-  draw(g) {
-    g.fillStyle = '#081220';
-    g.fillRect(0, 0, W, H);
-    // skor tabelası
-    text(g, this.api.players[0].name, L + 10, 46, { size: 34, color: PCOL[0], weight: 800, align: 'left' });
-    text(g, this.api.players[1].name, R - 10, 46, { size: 34, color: PCOL[1], weight: 800, align: 'right' });
-    rr(g, MID - 120, 4, 240, 74, 20);
-    g.fillStyle = 'rgba(255,255,255,.06)';
-    g.fill();
-    text(g, String(this.score[0]), MID - 56, 44, { size: 64, color: PCOL[0], weight: 800 });
-    text(g, ':', MID, 40, { size: 50, color: '#57538a', weight: 800 });
-    text(g, String(this.score[1]), MID + 56, 44, { size: 64, color: PCOL[1], weight: 800 });
-    text(g, `ilk ${TARGET} gol kazanır`, MID, 88, { size: 16, color: '#7d97b8', weight: 700 });
-
-    g.save();
-    this.shake.apply(g);
-    this.drawTable(g);
-
-    // disk izi
-    const p = this.puck;
-    const sp = Math.hypot(p.vx, p.vy);
-    this.trail.forEach(([x, y], i) => {
-      const a = (i / this.trail.length) * Math.min(1, sp / 900);
-      g.fillStyle = `rgba(255,240,160,${a * 0.35})`;
-      g.beginPath();
-      g.arc(x, y, PR * (0.4 + (0.6 * i) / this.trail.length), 0, Math.PI * 2);
-      g.fill();
-    });
-    for (const m of this.mallets) this.drawMallet(g, m);
-    if (this.phase !== 'goal') {
-      g.save();
-      g.translate(p.x, p.y);
+  malletSprite(p) {
+    const col = PCOL[p];
+    const S = (MR + 24) * 2;
+    return sprite(`mallet|${col}`, S, S, (g) => {
+      const c = S / 2;
+      g.drawImage(glow(col, S / 2, 0.55), 0, 0, S, S);
       g.fillStyle = 'rgba(0,0,0,.35)';
       g.beginPath();
-      g.arc(4, 6, PR, 0, Math.PI * 2);
+      g.arc(c + 5, c + 8, MR, 0, Math.PI * 2);
       g.fill();
-      g.shadowColor = '#ffe680';
-      g.shadowBlur = 24;
+      const grad = g.createRadialGradient(c - 10, c - 12, 4, c, c, MR);
+      grad.addColorStop(0, shade(col, 0.4));
+      grad.addColorStop(1, shade(col, -0.25));
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(c, c, MR, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = shade(col, -0.5);
+      g.lineWidth = 4;
+      g.beginPath();
+      g.arc(c, c, MR * 0.62, 0, Math.PI * 2);
+      g.stroke();
+      g.fillStyle = shade(col, 0.15);
+      g.beginPath();
+      g.arc(c, c, MR * 0.42, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = 'rgba(255,255,255,.45)';
+      g.beginPath();
+      g.ellipse(c - 8, c - 10, 9, 5, -0.6, 0, Math.PI * 2);
+      g.fill();
+    });
+  }
+
+  puckSprite() {
+    const S = (PR + 20) * 2;
+    return sprite('puck', S, S, (g) => {
+      const c = S / 2;
+      g.drawImage(glow('#ffe680', S / 2, 0.7), 0, 0, S, S);
+      g.fillStyle = 'rgba(0,0,0,.35)';
+      g.beginPath();
+      g.arc(c + 4, c + 6, PR, 0, Math.PI * 2);
+      g.fill();
       g.fillStyle = '#ffe14d';
       g.beginPath();
-      g.arc(0, 0, PR, 0, Math.PI * 2);
+      g.arc(c, c, PR, 0, Math.PI * 2);
       g.fill();
-      g.shadowBlur = 0;
       g.fillStyle = '#fff6c2';
       g.beginPath();
-      g.arc(0, 0, PR * 0.62, 0, Math.PI * 2);
+      g.arc(c, c, PR * 0.62, 0, Math.PI * 2);
       g.fill();
       g.fillStyle = '#ffcf26';
       g.beginPath();
-      g.arc(0, 0, PR * 0.32, 0, Math.PI * 2);
+      g.arc(c, c, PR * 0.32, 0, Math.PI * 2);
       g.fill();
-      g.restore();
+    });
+  }
+
+  draw(g) {
+    this.table.draw(g);
+    text(g, String(this.score[0]), MID - 56, 44, { size: 64, color: PCOL[0], weight: 800 });
+    text(g, String(this.score[1]), MID + 56, 44, { size: 64, color: PCOL[1], weight: 800 });
+
+    g.save();
+    this.shake.apply(g);
+    const p = this.puck;
+    const sp = Math.hypot(p.vx, p.vy);
+    if (sp > 200) {
+      const n = this.trail.length;
+      g.fillStyle = 'rgb(255,240,160)';
+      for (let i = 0; i < n; i++) {
+        const [x, y] = this.trail[i];
+        g.globalAlpha = (i / n) * Math.min(1, sp / 900) * 0.35;
+        g.beginPath();
+        g.arc(x, y, PR * (0.4 + (0.6 * i) / n), 0, Math.PI * 2);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+    }
+    for (const m of this.mallets) {
+      const spr = this.malletSprite(m.p);
+      g.drawImage(spr, m.x - spr.lw / 2, m.y - spr.lh / 2, spr.lw, spr.lh);
+      if (m.flash > 0) {
+        g.globalAlpha = Math.min(1, m.flash * 6);
+        g.drawImage(glow('#ffffff', MR + 22, 0.6), m.x - MR - 22, m.y - MR - 22, (MR + 22) * 2, (MR + 22) * 2);
+        g.globalAlpha = 1;
+      }
+      const s = this.api.input[m.p];
+      if (s.touch) {
+        g.strokeStyle = rgba(PCOL[m.p], 0.35);
+        g.lineWidth = 2;
+        g.beginPath();
+        g.arc(m.tx, m.ty, MR * 0.5, 0, Math.PI * 2);
+        g.stroke();
+      }
+    }
+    if (this.phase !== 'goal') {
+      const ps = this.puckSprite();
+      g.drawImage(ps, p.x - ps.lw / 2, p.y - ps.lh / 2, ps.lw, ps.lh);
     }
     this.parts.draw(g);
     g.restore();
@@ -406,6 +431,7 @@ export default {
   icon: '🏒',
   tag: 'Masa hokeyi',
   mode: 'versus',
+  cat: 'spor',
   color: '#2fc7ff',
   desc: 'Hızlı ve sert bir masa hokeyi maçı. Telefonunun ekranı senin yarı sahan: parmağını sürükledikçe raketin TV’de aynı yere gider.',
   howto: ['Telefon ekranı = sahadaki kendi yarın', 'Parmağını sürükle, raket takip etsin', 'Hızlı kaydırırsan sert vurursun', `İlk ${TARGET} golü atan kazanır`],

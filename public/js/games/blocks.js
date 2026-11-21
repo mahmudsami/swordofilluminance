@@ -1,16 +1,21 @@
 // BLOK DÜELLOSU — düşen bloklarla kafa kafaya bulmaca.
 // Satır tamamla, rakibine çöp satır gönder. 3 rauntta 2 alan kazanır.
-import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, winDots, rgba, shade } from '../host/gfx.js';
+import { W, H, PCOL, text, rr, Particles, Popups, Shake, banner, winDots, rgba, shade, sprite, Layer } from '../host/gfx.js';
 
 const COLS = 10;
 const ROWS = 22; // üstteki 2 satır görünmez
 const HID = 2;
 const CELL = 30;
-const DAS = 0.16;
-const ARR = 0.045;
-const SOFT = 0.03;
+const DAS = 0.15;
+const ARR = 0.04;
+const SOFT = 0.028;
 const LOCK = 0.5;
 const NEED = 2;
+const BX = [170, 810]; // tahta sol kenarları
+const BY = 96;
+const BW = COLS * CELL;
+const BH = (ROWS - HID) * CELL;
+const QX = [40, 1145]; // sıradaki parçalar kutusu
 
 const SHAPES = {
   I: ['....', 'IIII', '....', '....'],
@@ -38,30 +43,46 @@ for (const t of TYPES) {
     m = m.map((row, y) => row.map((_, x) => m[n - 1 - x][y]));
   }
 }
+// Önizleme kutusu için parça sınırları
+const BOUNDS = {};
+for (const t of TYPES) {
+  const c = ROT[t][0];
+  BOUNDS[t] = {
+    minX: Math.min(...c.map((v) => v[0])),
+    maxX: Math.max(...c.map((v) => v[0])),
+    minY: Math.min(...c.map((v) => v[1])),
+    maxY: Math.max(...c.map((v) => v[1])),
+  };
+}
 
-const sprites = {};
 function blockSprite(c, size = CELL) {
-  const key = c + size;
-  if (sprites[key]) return sprites[key];
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = size;
-  const g = cv.getContext('2d');
-  const col = COLORS[c] || c;
-  const grad = g.createLinearGradient(0, 0, size, size);
-  grad.addColorStop(0, shade(col, 0.25));
-  grad.addColorStop(1, shade(col, -0.25));
-  rr(g, 1, 1, size - 2, size - 2, size * 0.18);
-  g.fillStyle = grad;
-  g.fill();
-  g.fillStyle = 'rgba(255,255,255,.35)';
-  rr(g, size * 0.16, size * 0.12, size * 0.68, size * 0.16, size * 0.08);
-  g.fill();
-  g.strokeStyle = 'rgba(0,0,0,.25)';
-  g.lineWidth = 2;
-  rr(g, 1, 1, size - 2, size - 2, size * 0.18);
-  g.stroke();
-  sprites[key] = cv;
-  return cv;
+  return sprite(`blk|${c}|${size}`, size, size, (g) => {
+    const col = COLORS[c] || c;
+    const grad = g.createLinearGradient(0, 0, size, size);
+    grad.addColorStop(0, shade(col, 0.25));
+    grad.addColorStop(1, shade(col, -0.25));
+    rr(g, 1, 1, size - 2, size - 2, size * 0.18);
+    g.fillStyle = grad;
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,.35)';
+    rr(g, size * 0.16, size * 0.12, size * 0.68, size * 0.16, size * 0.08);
+    g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.25)';
+    g.lineWidth = 2;
+    rr(g, 1, 1, size - 2, size - 2, size * 0.18);
+    g.stroke();
+  });
+}
+
+function ghostSprite(c) {
+  return sprite(`ghost|${c}`, CELL, CELL, (g) => {
+    rr(g, 3, 3, CELL - 6, CELL - 6, 5);
+    g.fillStyle = rgba(COLORS[c], 0.12);
+    g.fill();
+    g.strokeStyle = rgba(COLORS[c], 0.7);
+    g.lineWidth = 2;
+    g.stroke();
+  });
 }
 
 class Board {
@@ -85,8 +106,8 @@ class Board {
     this.dasDir = null;
     this.dasT = 0;
     this.shake = new Shake();
-    this.x0 = p === 0 ? 170 : 810;
-    this.y0 = 96;
+    this.x0 = BX[p];
+    this.y0 = BY;
   }
 
   get api() {
@@ -113,7 +134,10 @@ class Board {
     this.dropT = 0;
     this.lockT = 0;
     this.lockN = 0;
-    if (this.collide(t, 0, x, y)) this.die();
+    if (this.collide(t, 0, x, y)) {
+      this.piece = null;
+      this.die();
+    }
   }
 
   grounded() {
@@ -199,18 +223,21 @@ class Board {
       this.lines += n;
       this.score += [0, 100, 300, 500, 800][n] * (1 + Math.max(0, this.combo) * 0.5);
       let atk = [0, 0, 1, 2, 4][n] + (this.combo >= 2 ? Math.floor(this.combo / 2) : 0);
+      // tahtayı tamamen temizlemek ekstra saldırı
+      const perfect = this.grid.every((row, y) => full.includes(y) || row.every((c) => !c));
+      if (perfect) atk += 4;
       const cancel = Math.min(atk, this.incoming);
       this.incoming -= cancel;
       atk -= cancel;
       if (atk > 0) this.game.sendGarbage(1 - this.p, atk);
-      const cx = this.x0 + (COLS * CELL) / 2;
+      const cx = this.x0 + BW / 2;
       const cy = this.y0 + (full[0] - HID) * CELL;
-      const label = ['', '', 'İKİLİ!', 'ÜÇLÜ!', 'DÖRTLÜ!'][n];
-      if (label) this.game.pops.add(label, cx, cy, n === 4 ? '#ffd23f' : '#fff', n === 4 ? 56 : 42);
+      const label = perfect ? 'TERTEMİZ!' : ['', '', 'İKİLİ!', 'ÜÇLÜ!', 'DÖRTLÜ!'][n];
+      if (label) this.game.pops.add(label, cx, cy, n === 4 || perfect ? '#ffd23f' : '#fff', n === 4 || perfect ? 56 : 42);
       if (this.combo >= 1) this.game.pops.add(`KOMBO x${this.combo + 1}`, cx, cy + 50, '#46e38a', 30);
       for (const y of full) {
-        for (let x = 0; x < COLS; x++) {
-          this.game.parts.burst(this.x0 + (x + 0.5) * CELL, this.y0 + (y - HID + 0.5) * CELL, 3, COLORS[this.grid[y][x]], { speed: 300, life: 0.8, size: 7 });
+        for (let x = 0; x < COLS; x += 2) {
+          this.game.parts.burst(this.x0 + (x + 1) * CELL, this.y0 + (y - HID + 0.5) * CELL, 3, COLORS[this.grid[y][x]], { speed: 300, life: 0.7, size: 7 });
         }
       }
       if (n === 4) {
@@ -218,7 +245,7 @@ class Board {
         this.api.buzz(this.p, 60);
       }
       this.api.sfx(n >= 4 ? 'big' : 'clear');
-      this.clearing = { rows: full, t: 0.28 };
+      this.clearing = { rows: full, t: 0.26 };
     } else {
       this.combo = -1;
       if (this.incoming > 0) {
@@ -227,7 +254,7 @@ class Board {
         this.addGarbage(n);
         if (this.dead) return;
       }
-      this.spawnDelay = 0.06;
+      this.spawnDelay = 0.05;
     }
   }
 
@@ -335,133 +362,83 @@ class Board {
     } else this.lockT = 0;
   }
 
-  // ---------------------------------------------------------------- çizim
+  // ---------------------------------------------------------------- çizim (sadece değişen kısımlar)
   draw(g) {
     const { x0, y0 } = this;
-    const bw = COLS * CELL;
-    const bh = (ROWS - HID) * CELL;
-    const col = PCOL[this.p];
     g.save();
     this.shake.apply(g);
-
-    // çerçeve
-    g.save();
-    g.shadowColor = rgba(col, 0.6);
-    g.shadowBlur = 26;
-    rr(g, x0 - 8, y0 - 8, bw + 16, bh + 16, 14);
-    g.fillStyle = shade(col, -0.55);
-    g.fill();
-    g.restore();
-    rr(g, x0 - 3, y0 - 3, bw + 6, bh + 6, 8);
-    g.fillStyle = '#0d0b24';
-    g.fill();
-
-    // ızgara
-    g.strokeStyle = 'rgba(255,255,255,.045)';
-    g.lineWidth = 1;
-    g.beginPath();
-    for (let x = 1; x < COLS; x++) {
-      g.moveTo(x0 + x * CELL + 0.5, y0);
-      g.lineTo(x0 + x * CELL + 0.5, y0 + bh);
-    }
-    for (let y = 1; y < ROWS - HID; y++) {
-      g.moveTo(x0, y0 + y * CELL + 0.5);
-      g.lineTo(x0 + bw, y0 + y * CELL + 0.5);
-    }
-    g.stroke();
 
     // yerleşmiş bloklar
     const greyFrom = this.dead ? ROWS - Math.floor(this.deathT * 45) : ROWS + 1;
     for (let y = HID; y < ROWS; y++) {
+      const row = this.grid[y];
       for (let x = 0; x < COLS; x++) {
-        const c = this.grid[y][x];
-        if (!c) continue;
-        g.drawImage(blockSprite(y >= greyFrom ? 'G' : c), x0 + x * CELL, y0 + (y - HID) * CELL);
+        const c = row[x];
+        if (c) g.drawImage(blockSprite(y >= greyFrom ? 'G' : c), x0 + x * CELL, y0 + (y - HID) * CELL, CELL, CELL);
       }
     }
 
     // silinen satır parlaması
     if (this.clearing) {
-      const a = this.clearing.t / 0.28;
-      g.fillStyle = `rgba(255,255,255,${0.85 * a})`;
-      for (const y of this.clearing.rows) g.fillRect(x0, y0 + (y - HID) * CELL, bw, CELL);
+      g.fillStyle = `rgba(255,255,255,${0.85 * (this.clearing.t / 0.26)})`;
+      for (const y of this.clearing.rows) g.fillRect(x0, y0 + (y - HID) * CELL, BW, CELL);
     }
 
     // gölge ve aktif parça
     const p = this.piece;
     if (p) {
       const gy = this.ghostY();
-      g.strokeStyle = rgba(COLORS[p.t], 0.7);
-      g.fillStyle = rgba(COLORS[p.t], 0.12);
-      g.lineWidth = 2;
+      const gs = ghostSprite(p.t);
+      const bs = blockSprite(p.t);
       for (const [cx, cy] of ROT[p.t][p.r]) {
         const Y = gy + cy;
-        if (Y < HID) continue;
-        rr(g, x0 + (p.x + cx) * CELL + 3, y0 + (Y - HID) * CELL + 3, CELL - 6, CELL - 6, 5);
-        g.fill();
-        g.stroke();
+        if (Y >= HID) g.drawImage(gs, x0 + (p.x + cx) * CELL, y0 + (Y - HID) * CELL, CELL, CELL);
       }
       const flash = this.grounded() ? 0.5 + 0.5 * Math.sin(this.lockT * 30) : 0;
       for (const [cx, cy] of ROT[p.t][p.r]) {
         const Y = p.y + cy;
         if (Y < HID) continue;
-        g.drawImage(blockSprite(p.t), x0 + (p.x + cx) * CELL, y0 + (Y - HID) * CELL);
+        const px = x0 + (p.x + cx) * CELL;
+        const py = y0 + (Y - HID) * CELL;
+        g.drawImage(bs, px, py, CELL, CELL);
         if (flash > 0) {
           g.fillStyle = `rgba(255,255,255,${0.15 * flash})`;
-          g.fillRect(x0 + (p.x + cx) * CELL + 1, y0 + (Y - HID) * CELL + 1, CELL - 2, CELL - 2);
+          g.fillRect(px + 1, py + 1, CELL - 2, CELL - 2);
         }
       }
     }
 
     // gelen çöp göstergesi
-    const mx = this.p === 0 ? x0 + bw + 12 : x0 - 22;
-    rr(g, mx, y0, 10, bh, 5);
-    g.fillStyle = 'rgba(255,255,255,.06)';
-    g.fill();
     if (this.incoming > 0) {
+      const mx = this.p === 0 ? x0 + BW + 12 : x0 - 22;
       const h = Math.min(ROWS - HID, this.incoming) * CELL;
-      const pulse = 0.65 + 0.35 * Math.sin(performance.now() / 90);
-      rr(g, mx, y0 + bh - h, 10, h, 5);
+      const pulse = 0.65 + 0.35 * Math.sin(this.game.time * 11);
       g.fillStyle = `rgba(255,80,90,${pulse})`;
-      g.fill();
+      g.fillRect(mx, y0 + BH - h, 10, h);
     }
 
     if (this.dead && this.deathT > 0.3) {
       g.fillStyle = `rgba(8,6,24,${Math.min(0.6, (this.deathT - 0.3) * 1.5)})`;
-      g.fillRect(x0, y0, bw, bh);
-      text(g, 'ELENDİ', x0 + bw / 2, y0 + bh / 2, { size: 54, color: '#ff6b7a', weight: 800, stroke: '#1a0a14', sw: 8, alpha: Math.min(1, (this.deathT - 0.3) * 3) });
+      g.fillRect(x0, y0, BW, BH);
+      text(g, 'ELENDİ', x0 + BW / 2, y0 + BH / 2, { size: 54, color: '#ff6b7a', weight: 800, stroke: '#1a0a14', sw: 8, alpha: Math.min(1, (this.deathT - 0.3) * 3) });
     }
     g.restore();
 
-    // isim
-    const nx = x0 + bw / 2;
-    text(g, this.game.api.players[this.p].name, nx, 38, { size: 36, color: col, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 6 });
-    winDots(g, nx, 72, this.game.wins[this.p], NEED, col);
+    winDots(g, x0 + BW / 2, 72, this.game.wins[this.p], NEED, PCOL[this.p]);
 
     // sıradaki parçalar
-    const qx = this.p === 0 ? 40 : 1145;
-    const qy = y0;
-    rr(g, qx, qy, 96, 300, 14);
-    g.fillStyle = 'rgba(255,255,255,.05)';
-    g.fill();
-    text(g, 'SIRADA', qx + 48, qy + 22, { size: 18, color: '#a7a2d1', weight: 700 });
+    const qx = QX[this.p];
     for (let i = 0; i < 3; i++) {
       const t = this.game.pieceAt(this.seqI + i);
       const s = i === 0 ? 22 : 17;
-      const cells = ROT[t][0];
-      const minX = Math.min(...cells.map((c) => c[0]));
-      const maxX = Math.max(...cells.map((c) => c[0]));
-      const minY = Math.min(...cells.map((c) => c[1]));
-      const maxY = Math.max(...cells.map((c) => c[1]));
-      const ox = qx + 48 - ((maxX - minX + 1) * s) / 2;
-      const oy = qy + 72 + i * 80 - ((maxY - minY + 1) * s) / 2;
-      for (const [cx, cy] of cells) g.drawImage(blockSprite(t, s), ox + (cx - minX) * s, oy + (cy - minY) * s);
+      const b = BOUNDS[t];
+      const ox = qx + 48 - ((b.maxX - b.minX + 1) * s) / 2;
+      const oy = y0 + 72 + i * 80 - ((b.maxY - b.minY + 1) * s) / 2;
+      const spr = blockSprite(t, s);
+      for (const [cx, cy] of ROT[t][0]) g.drawImage(spr, ox + (cx - b.minX) * s, oy + (cy - b.minY) * s, s, s);
     }
-    // istatistik
-    text(g, 'SATIR', qx + 48, qy + 340, { size: 18, color: '#a7a2d1' });
-    text(g, String(this.lines), qx + 48, qy + 372, { size: 36, color: '#fff', weight: 800 });
-    text(g, 'PUAN', qx + 48, qy + 420, { size: 18, color: '#a7a2d1' });
-    text(g, String(Math.floor(this.score)), qx + 48, qy + 450, { size: 28, color: '#fff', weight: 800 });
+    text(g, String(this.lines), qx + 48, y0 + 372, { size: 36, color: '#fff', weight: 800 });
+    text(g, String(Math.floor(this.score)), qx + 48, y0 + 450, { size: 28, color: '#fff', weight: 800 });
   }
 }
 
@@ -470,15 +447,17 @@ class BlocksGame {
     this.api = api;
     this.wins = [0, 0];
     this.round = 0;
+    this.time = 0;
     this.parts = new Particles();
     this.pops = new Popups();
+    this.bg = new Layer(W, H, (g) => this.paintBg(g));
     this.newRound();
   }
 
   newRound() {
     this.round++;
     this.seq = [];
-    this.time = 0;
+    this.levelTime = 0;
     this.boards = [new Board(this, 0), new Board(this, 1)];
     this.boards.forEach((b) => b.spawn());
     this.phase = this.round === 1 ? 'play' : 'intro';
@@ -500,7 +479,7 @@ class BlocksGame {
   }
 
   get level() {
-    return 1 + Math.floor(this.time / 25);
+    return 1 + Math.floor(this.levelTime / 25);
   }
 
   get gravity() {
@@ -511,7 +490,7 @@ class BlocksGame {
     const b = this.boards[p];
     if (b.dead) return;
     b.incoming += n;
-    this.pops.add(`+${n}`, b.x0 + (COLS * CELL) / 2, b.y0 + 520, '#ff5a6a', 46);
+    this.pops.add(`+${n}`, b.x0 + BW / 2, b.y0 + 520, '#ff5a6a', 46);
   }
 
   onKey(p, k, down) {
@@ -520,6 +499,7 @@ class BlocksGame {
   }
 
   update(dt) {
+    this.time += dt;
     this.parts.update(dt);
     this.pops.update(dt);
     if (this.phase === 'intro') {
@@ -528,7 +508,7 @@ class BlocksGame {
       return;
     }
     if (this.phase === 'play') {
-      this.time += dt;
+      this.levelTime += dt;
       this.boards.forEach((b) => b.update(dt));
       const dead = this.boards.map((b) => b.dead);
       if (dead[0] || dead[1]) {
@@ -541,13 +521,16 @@ class BlocksGame {
       return;
     }
     if (this.phase === 'over') {
-      this.boards.forEach((b) => b.update(dt));
+      // sadece elenme animasyonu ilerler; kazananın parçası olduğu yerde durur
+      for (const b of this.boards) {
+        b.shake.update(dt);
+        if (b.dead) b.deathT += dt;
+      }
       this.phaseT -= dt;
       if (this.phaseT <= 0) {
         const w = this.roundWinner;
-        if (w !== null && this.wins[w] >= NEED) {
-          this.api.end({ winner: w, detail: `Raunt skoru ${this.wins[0]} - ${this.wins[1]}` });
-        } else this.newRound();
+        if (w !== null && this.wins[w] >= NEED) this.api.end({ winner: w, detail: `Raunt skoru ${this.wins[0]} - ${this.wins[1]}` });
+        else this.newRound();
       }
     }
   }
@@ -564,36 +547,78 @@ class BlocksGame {
     }
   }
 
-  draw(g) {
+  // Değişmeyen her şey tek katmanda: arka plan, çerçeveler, ızgara, etiketler
+  paintBg(g) {
     const bg = g.createLinearGradient(0, 0, 0, H);
     bg.addColorStop(0, '#15123a');
     bg.addColorStop(1, '#0a0920');
     g.fillStyle = bg;
     g.fillRect(0, 0, W, H);
-    // arka plan desen
     g.fillStyle = 'rgba(255,255,255,.025)';
     for (let x = 0; x < W; x += 40) for (let y = (x / 40) % 2 ? 20 : 0; y < H; y += 40) g.fillRect(x, y, 3, 3);
-
-    this.boards.forEach((b) => b.draw(g));
-
-    // orta panel
+    for (const p of [0, 1]) {
+      const x0 = BX[p];
+      const col = PCOL[p];
+      g.save();
+      g.shadowColor = rgba(col, 0.6);
+      g.shadowBlur = 26;
+      rr(g, x0 - 8, BY - 8, BW + 16, BH + 16, 14);
+      g.fillStyle = shade(col, -0.55);
+      g.fill();
+      g.restore();
+      rr(g, x0 - 3, BY - 3, BW + 6, BH + 6, 8);
+      g.fillStyle = '#0d0b24';
+      g.fill();
+      g.strokeStyle = 'rgba(255,255,255,.045)';
+      g.lineWidth = 1;
+      g.beginPath();
+      for (let x = 1; x < COLS; x++) {
+        g.moveTo(x0 + x * CELL + 0.5, BY);
+        g.lineTo(x0 + x * CELL + 0.5, BY + BH);
+      }
+      for (let y = 1; y < ROWS - HID; y++) {
+        g.moveTo(x0, BY + y * CELL + 0.5);
+        g.lineTo(x0 + BW, BY + y * CELL + 0.5);
+      }
+      g.stroke();
+      // çöp göstergesi yuvası
+      const mx = p === 0 ? x0 + BW + 12 : x0 - 22;
+      rr(g, mx, BY, 10, BH, 5);
+      g.fillStyle = 'rgba(255,255,255,.06)';
+      g.fill();
+      text(g, this.api.players[p].name, x0 + BW / 2, 38, { size: 36, color: col, weight: 800, stroke: 'rgba(0,0,0,.5)', sw: 6 });
+      const qx = QX[p];
+      rr(g, qx, BY, 96, 300, 14);
+      g.fillStyle = 'rgba(255,255,255,.05)';
+      g.fill();
+      text(g, 'SIRADA', qx + 48, BY + 22, { size: 18, color: '#a7a2d1', weight: 700 });
+      text(g, 'SATIR', qx + 48, BY + 340, { size: 18, color: '#a7a2d1' });
+      text(g, 'PUAN', qx + 48, BY + 420, { size: 18, color: '#a7a2d1' });
+    }
     const cx = W / 2;
-    text(g, `RAUNT ${this.round}`, cx, 130, { size: 30, color: '#a7a2d1', weight: 800 });
-    text(g, `${this.wins[0]}`, cx - 50, 200, { size: 80, color: PCOL[0], weight: 800 });
-    text(g, '–', cx, 196, { size: 60, color: '#57538a', weight: 800 });
-    text(g, `${this.wins[1]}`, cx + 50, 200, { size: 80, color: PCOL[1], weight: 800 });
     text(g, `${NEED} raunt alan kazanır`, cx, 255, { size: 18, color: '#7d79ad', weight: 600 });
     rr(g, cx - 110, 300, 220, 110, 18);
     g.fillStyle = 'rgba(255,255,255,.05)';
     g.fill();
     text(g, 'HIZ', cx, 330, { size: 20, color: '#a7a2d1' });
-    text(g, String(this.level), cx, 375, { size: 52, color: '#ffd23f', weight: 800 });
-    const m = Math.floor(this.time / 60);
-    const s = Math.floor(this.time % 60);
-    text(g, `${m}:${String(s).padStart(2, '0')}`, cx, 450, { size: 30, color: '#e6e2ff', weight: 700 });
     text(g, 'İkili satır → 1 çöp', cx, 540, { size: 17, color: '#6f6ba3', weight: 600 });
     text(g, 'Üçlü → 2  ·  Dörtlü → 4', cx, 566, { size: 17, color: '#6f6ba3', weight: 600 });
     text(g, 'Kendi satırın gelen çöpü siler', cx, 592, { size: 17, color: '#6f6ba3', weight: 600 });
+  }
+
+  draw(g) {
+    this.bg.draw(g);
+    this.boards.forEach((b) => b.draw(g));
+
+    const cx = W / 2;
+    text(g, `RAUNT ${this.round}`, cx, 130, { size: 30, color: '#a7a2d1', weight: 800 });
+    text(g, `${this.wins[0]}`, cx - 50, 200, { size: 80, color: PCOL[0], weight: 800 });
+    text(g, '–', cx, 196, { size: 60, color: '#57538a', weight: 800 });
+    text(g, `${this.wins[1]}`, cx + 50, 200, { size: 80, color: PCOL[1], weight: 800 });
+    text(g, String(this.level), cx, 375, { size: 52, color: '#ffd23f', weight: 800 });
+    const m = Math.floor(this.levelTime / 60);
+    const s = Math.floor(this.levelTime % 60);
+    text(g, `${m}:${String(s).padStart(2, '0')}`, cx, 450, { size: 30, color: '#e6e2ff', weight: 700 });
 
     this.parts.draw(g);
     this.pops.draw(g);
@@ -613,9 +638,10 @@ export default {
   icon: '🧱',
   tag: 'Düşen bloklar',
   mode: 'versus',
+  cat: 'bulmaca',
   color: '#8a5cff',
   desc: 'Düşen blokları yerleştir, satırları tamamla. Aynı anda iki ya da daha fazla satır silersen rakibine çöp satır gönderirsin!',
-  howto: ['◀ ▶ parçayı kaydır', '▼ hızlı indir', 'A ya da ▲ döndür', 'B anında bırak', '3 rauntta 2 alan kazanır'],
+  howto: ['◀ ▶ parçayı kaydır (basılı tut: hızlı kayar)', '▼ hızlı indir', 'A ya da ▲ döndür', 'B anında bırak', '3 rauntta 2 alan kazanır'],
   keys: '1. oyuncu WASD + F (döndür) / G (bırak) · 2. oyuncu Oklar + K / L',
   controller: { layout: 'dpad', dirs: 4, a: 'DÖNDÜR', b: 'BIRAK' },
   create: (api) => new BlocksGame(api),
