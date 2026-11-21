@@ -9,7 +9,9 @@ const os = require('os');
 const { WebSocketServer } = require('ws');
 const QRCode = require('qrcode');
 
-const PORT = Number(process.env.PORT) || 3000;
+const FIXED_PORT = !!process.env.PORT; // PORT verilmediyse doluysa sıradaki boş portu dener
+let PORT = Number(process.env.PORT) || 3000;
+const FIRST_PORT = PORT;
 const PUBLIC = path.join(__dirname, 'public');
 const MAX_PLAYERS = 2;
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // I ve O yok (1 ve 0 ile karışmasın)
@@ -33,7 +35,8 @@ function lanAddresses() {
   const out = [];
   for (const list of Object.values(os.networkInterfaces())) {
     for (const a of list || []) {
-      if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+      // Node 18.0-18.3 'family' değerini sayı (4) olarak verir
+      if ((a.family === 'IPv4' || a.family === 4) && !a.internal) out.push(a.address);
     }
   }
   // Ev ağlarında yaygın olan adresleri öne al
@@ -291,10 +294,33 @@ setInterval(() => {
   }
 }, 15000);
 
+// Port doluysa çökmek yerine anlaşılır bir mesaj ver ve (PORT verilmediyse) sıradaki portu dene
+wss.on('error', () => {}); // dinleme hataları aşağıda sunucu üzerinden ele alınıyor
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    if (!FIXED_PORT && PORT < FIRST_PORT + 20) {
+      console.log(`  ${PORT} portu kullanımda (KANEPE başka bir terminalde açık olabilir), ${PORT + 1} deneniyor…`);
+      PORT++;
+      setTimeout(() => server.listen(PORT), 150);
+      return;
+    }
+    console.error(`\n  HATA: ${PORT} portu başka bir program tarafından kullanılıyor.`);
+    console.error('  KANEPE zaten başka bir terminalde açıksa onu kapatın (Ctrl+C) ya da başka bir port seçin:');
+    console.error('    PORT=3005 npm start\n');
+    process.exit(1);
+  }
+  if (err.code === 'EACCES') {
+    console.error(`\n  HATA: ${PORT} portunu açma izni yok. 1024'ten büyük bir port deneyin:  PORT=3005 npm start\n`);
+    process.exit(1);
+  }
+  throw err;
+});
+
 server.listen(PORT, () => {
   const ips = lanAddresses();
   console.log('\n  KANEPE çalışıyor!\n');
   console.log(`  TV / bilgisayar :  http://localhost:${PORT}/tv`);
   for (const ip of ips) console.log(`  Aynı Wi-Fi'deki telefonlar :  http://${ip}:${PORT}/play`);
+  if (PORT !== FIRST_PORT) console.log(`\n  Not: ${FIRST_PORT} portu dolu olduğu için ${PORT} kullanılıyor.`);
   console.log('');
 });

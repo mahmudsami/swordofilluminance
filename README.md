@@ -18,6 +18,8 @@ npm start
 - TV / bilgisayarda: <http://localhost:3000/tv>
 - Telefonlar **aynı Wi-Fi ağında** olmalı. Ekrandaki QR kodu okutmak yeterli; sunucu açılırken konsola telefonların gireceği adresi de yazar (ör. `http://192.168.1.20:3000/play`).
 
+Node.js 14 ve üzeri yeterli. 3000 portu doluysa (örneğin KANEPE başka bir terminalde zaten açıksa) sunucu otomatik olarak 3001, 3002… portlarını dener ve kullandığı adresi konsola yazar. Belirli bir port için: `PORT=3005 npm start`.
+
 Telefon olmadan denemek için lobide boş oyuncu yerindeki **⌨ Klavye** düğmesine basın:
 
 | | Yön | A | B |
