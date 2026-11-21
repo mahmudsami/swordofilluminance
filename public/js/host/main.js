@@ -48,6 +48,8 @@ let needDraw = true;
 let catFilter = 'all';
 let userPaused = false; // kopma olduğunda oyun zaten kullanıcı tarafından durdurulmuş muydu
 let infoSeq = Date.now(); // telefon başlıklarının sırası (sırasız kanalda eskisi yenisini ezmesin)
+let frameAvg = 16.7; // TV'nin ortalama kare aralığı (ms) — telefondaki ayrıntılarda görünür
+const hostStamp = () => Math.round(performance.now() * 10) / 10;
 
 function mkInput() {
   return { up: false, down: false, left: false, right: false, a: false, b: false, sx: 0, sy: 0, tx: 0.5, ty: 0.5, touch: false };
@@ -199,7 +201,7 @@ function onMsg(m) {
         if (s) {
           const prev = players[i];
           const keep = same && prev && prev.kind === 'phone' && prev.name === s.name;
-          players[i] = { name: s.name, kind: 'phone', connected: s.connected, wins: keep ? prev.wins : 0, rtt: keep ? prev.rtt : 0, p2p: !!peers[i] && keep && prev.p2p };
+          players[i] = { name: s.name, kind: 'phone', connected: s.connected, wins: keep ? prev.wins : 0, rtt: keep ? prev.rtt : 0, up: keep ? prev.up : 0, p2p: !!peers[i] && keep && prev.p2p };
         } else if (players[i]?.kind === 'phone') {
           players[i] = null;
           closePeer(i);
@@ -217,7 +219,7 @@ function onMsg(m) {
       graceT[p] = null;
       if (prev && prev.kind === 'kbd' && !players[1 - p]) players[1 - p] = prev; // klavye oyuncusunu öbür yere kaydır
       const again = m.again && prev && prev.kind === 'phone';
-      players[p] = { name: m.name, kind: 'phone', connected: true, wins: again ? prev.wins : 0, rtt: again ? prev.rtt : 0, p2p: again ? prev.p2p : false };
+      players[p] = { name: m.name, kind: 'phone', connected: true, wins: again ? prev.wins : 0, rtt: again ? prev.rtt : 0, up: again ? prev.up : 0, p2p: again ? prev.p2p : false };
       lastSeq[p] = 0;
       if (!again) {
         closePeer(p);
@@ -388,9 +390,12 @@ function onPhone(p, m, viaP2P) {
   if ((p !== 0 && p !== 1) || !players[p] || players[p].kind !== 'phone') return;
   const k = m.k;
   if (k === 'ping') {
-    sendPhone(p, { t: 'pong', ts: m.ts });
+    sendPhone(p, { t: 'pong', ts: m.ts, h: hostStamp(), f: Math.round(frameAvg) });
     return;
   }
+  // gecikme ölçümü: sırası karışmış olsa da her durum mesajına hemen yanıt ver
+  // (h: mesajın TV'ye ulaştığı an, TV saatiyle — telefon iki yönün gecikmesini ayrı hesaplar)
+  if (k === 'st' && m.ts) sendPhone(p, { t: 'pong', ts: m.ts, h: hostStamp(), f: Math.round(frameAvg) });
   // durum mesajlarında eski / sırası karışmış olanları at
   if (STATEFUL.has(k) && m.n !== undefined) {
     if (m.n <= lastSeq[p]) return;
@@ -402,7 +407,6 @@ function onPhone(p, m, viaP2P) {
     return;
   }
   if (k === 'st') {
-    if (m.ts) sendPhone(p, { t: 'pong', ts: m.ts });
     const b = m.b | 0;
     for (const kk of KEYS) {
       phoneKeys[p][kk] = !!(b & BIT[kk]);
@@ -410,9 +414,12 @@ function onPhone(p, m, viaP2P) {
     }
     const pl = players[p];
     const rtt = +m.r || 0;
+    const up = m.u !== undefined ? +m.u || 0 : rtt / 2;
     const p2p = !!m.v || viaP2P;
-    if (Math.abs(rtt - (pl.rtt || 0)) > 4 || pl.p2p !== p2p) {
-      pl.rtt = rtt;
+    pl.rtt = rtt;
+    pl.down = +m.d || 0;
+    if (Math.abs(up - (pl.up || 0)) > 3 || pl.p2p !== p2p) {
+      pl.up = up;
       pl.p2p = p2p;
       updateSlotNet(p);
     }
@@ -705,9 +712,11 @@ function renderRoom() {
 function netLabel(s) {
   if (s.kind === 'kbd') return '';
   if (!s.connected) return '';
-  const ms = Math.round(s.rtt || 0);
-  const cls = ms > 150 ? 'slow' : ms > 70 ? 'mid' : 'good';
-  return `<span class="netinfo ${cls}" title="${s.p2p ? 'Telefon TV’ye doğrudan bağlı' : 'Sunucu üzerinden bağlı'}">${s.p2p ? '⚡ Doğrudan' : '☁ Sunucu'}${ms ? ` · ${ms} ms` : ''}</span>`;
+  // gösterilen: kumandanın asıl gecikmesi (telefon → TV)
+  const ms = Math.round(s.up || 0);
+  const cls = ms > 70 ? 'slow' : ms > 30 ? 'mid' : 'good';
+  const tip = `${s.p2p ? 'Telefon TV’ye doğrudan bağlı' : 'Sunucu üzerinden bağlı'} · kumanda → TV ${ms} ms · TV → telefon ${Math.round(s.down || 0)} ms`;
+  return `<span class="netinfo ${cls}" title="${tip}">${s.p2p ? '⚡ Doğrudan' : '☁ Sunucu'}${ms ? ` · ${ms} ms` : ''}</span>`;
 }
 
 function updateSlotNet(p) {
@@ -898,7 +907,7 @@ function hideModal() {
 function netSummary() {
   return [0, 1]
     .filter((p) => players[p] && players[p].kind === 'phone' && players[p].connected)
-    .map((p) => `${players[p].name}: ${players[p].p2p ? 'doğrudan' : 'sunucu'}${players[p].rtt ? ` ${Math.round(players[p].rtt)} ms` : ''}`)
+    .map((p) => `${players[p].name}: ${players[p].p2p ? 'doğrudan' : 'sunucu'}${players[p].up ? ` ${Math.round(players[p].up)} ms` : ''}`)
     .join(' · ');
 }
 
@@ -1063,6 +1072,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   let dt = (now - lastT) / 1000;
   lastT = now;
+  if (dt > 0 && dt < 0.5) frameAvg += (dt * 1000 - frameAvg) * 0.05;
   if (dt > 0.25) dt = 0.25;
   if (dt <= 0) return;
   if (!game) return;

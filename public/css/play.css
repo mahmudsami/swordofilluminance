@@ -73,6 +73,13 @@ body {
 .net { width: 10px; height: 10px; border-radius: 50%; background: var(--good); flex: none; }
 .lat { font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: rgba(255,255,255,.07); white-space: nowrap; }
 .lat:empty { display: none; }
+.lat { cursor: pointer; }
+.netpanel { position: fixed; top: 58px; right: 10px; z-index: 60; min-width: 230px; max-width: calc(100vw - 20px); background: rgba(22,17,48,.97); border: 1px solid rgba(255,255,255,.14); border-radius: 14px; padding: 10px 14px; font-size: 14px; line-height: 1.7; box-shadow: 0 10px 28px rgba(0,0,0,.45); }
+.netpanel.hidden { display: none; }
+.netpanel div { display: flex; justify-content: space-between; gap: 14px; }
+.netpanel span { opacity: .75; }
+.netpanel b { color: #fff; }
+.netpanel p { margin: 6px 0 0; font-size: 12.5px; line-height: 1.4; opacity: .85; }
 .lat.good { color: var(--good); }
 .lat.mid { color: var(--accent); }
 .lat.slow { color: #ff8a8a; }

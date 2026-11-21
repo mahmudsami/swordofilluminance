@@ -197,17 +197,36 @@ function onRtc(m) {
 }
 
 // ---------------------------------------------------------------- ağ durumu & gecikme
-// Gecikme = son ölçümlerin ortancası (tek tük takılmalar sayıyı şişirmesin)
-const rttSamples = [];
+// TV her yanıtta mesajı kendi saatiyle ne zaman aldığını da yollar. Gidiş-dönüşü en kısa olan
+// ölçümden iki cihazın saat farkı bulunur; böylece telefon → TV (kumandanın asıl gecikmesi) ve
+// TV → telefon yönleri ayrı ayrı hesaplanır. Telefonun Wi‑Fi'si uyurken çoğunlukla yalnız
+// TV → telefon yönü gecikir: bu titreşimi geciktirir ama kumandayı etkilemez.
+const lag = { samples: [], up: 0, down: 0, tvFrame: 0 };
+const median = (arr) => {
+  const v = arr.slice().sort((a, b) => a - b);
+  return v.length ? v[v.length >> 1] : 0;
+};
 function resetRtt() {
-  rttSamples.length = 0;
+  lag.samples.length = 0;
+  lag.up = lag.down = 0;
   rtt = 0;
 }
-function addRtt(r) {
-  rttSamples.push(r);
-  if (rttSamples.length > 24) rttSamples.shift();
-  const s = rttSamples.slice().sort((a, b) => a - b);
-  rtt = s[s.length >> 1];
+function addSample(t0, t1, t3) {
+  const s = lag.samples;
+  const one = t1 === undefined;
+  s.push({ t: t3, rtt: t3 - t0, a: one ? 0 : t1 - t0, b: one ? 0 : t3 - t1, one });
+  while (s.length > 240 || t3 - s[0].t > 10000) s.shift();
+  const recent = s.slice(-25);
+  rtt = median(recent.map((x) => x.rtt));
+  if (one) {
+    lag.up = lag.down = rtt / 2;
+    return;
+  }
+  let best = s[0];
+  for (const x of s) if (!x.one && x.rtt < best.rtt) best = x;
+  const th = (best.a - best.b) / 2; // iki saatin farkı
+  lag.up = Math.max(0, median(recent.map((x) => x.a - th)));
+  lag.down = Math.max(0, median(recent.map((x) => x.b + th)));
 }
 const stamp = () => Math.round(performance.now() * 10) / 10;
 function ping() {
@@ -216,7 +235,7 @@ function ping() {
 }
 function sendState() {
   if (slot < 0) return;
-  sendIn({ k: 'st', b: keys, r: Math.round(rtt), v: p2pOpen() ? 1 : 0, ts: stamp() });
+  sendIn({ k: 'st', b: keys, r: Math.round(rtt), u: Math.round(lag.up), d: Math.round(lag.down), v: p2pOpen() ? 1 : 0, ts: stamp() });
 }
 
 function updateNet() {
@@ -229,11 +248,41 @@ function updateNet() {
     lat.className = 'lat';
     return;
   }
-  const ms = Math.round(rtt);
-  lat.textContent = `${p2pOpen() ? '⚡' : '☁'} ${ms ? ms + ' ms' : '…'}`;
-  lat.className = 'lat ' + (ms > 120 ? 'slow' : ms > 60 ? 'mid' : 'good');
-  lat.title = p2pOpen() ? 'TV ile doğrudan bağlantı' : 'Sunucu üzerinden bağlantı';
+  // rozet: kumandanın asıl gecikmesi (telefon → TV)
+  const up = Math.max(1, Math.round(lag.up));
+  lat.textContent = `${p2pOpen() ? '⚡' : '☁'} ${rtt ? up + ' ms' : '…'}`;
+  lat.className = 'lat ' + (up > 70 ? 'slow' : up > 30 ? 'mid' : 'good');
+  lat.title = 'Ayrıntı için dokun';
+  const panel = $('#netpanel');
+  if (panel && !panel.classList.contains('hidden')) {
+    const row = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
+    panel.innerHTML =
+      row('Kumanda → TV', rtt ? `${up} ms` : '…') +
+      row('TV → telefon', rtt ? `${Math.max(1, Math.round(lag.down))} ms` : '…') +
+      row('Gidiş-dönüş', rtt ? `${Math.max(1, Math.round(rtt))} ms` : '…') +
+      row('Bağlantı', p2pOpen() ? '⚡ doğrudan' : '☁ sunucu üzerinden') +
+      (lag.tvFrame ? row('TV kare süresi', `${lag.tvFrame} ms`) : '') +
+      (rtt && lag.down - up > 40 ? '<p>TV → telefon yönündeki gecikme, telefonun Wi‑Fi güç tasarrufundan; kumandayı etkilemez.</p>' : '') +
+      (up > 40 ? '<p>Kumanda gecikmesi yüksek: bilgisayar Wi‑Fi’deyse kabloyla bağlayın ya da prize takın; telefonu modeme yaklaştırın, 5 GHz ağ kullanın.</p>' : '');
+  }
 }
+
+// rozete dokununca gecikme ayrıntıları
+let netPanelT = null;
+$('#lat').addEventListener('click', () => {
+  let panel = $('#netpanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'netpanel';
+    panel.className = 'netpanel hidden';
+    panel.addEventListener('click', () => panel.classList.add('hidden'));
+    document.body.appendChild(panel);
+  }
+  panel.classList.toggle('hidden');
+  updateNet();
+  clearTimeout(netPanelT);
+  netPanelT = setTimeout(() => panel.classList.add('hidden'), 8000);
+});
 
 // Telefonlar Wi-Fi'de birkaç yüz ms trafik görmezse radyoyu uyutur; bu sırada TV'den gelen paketler
 // erişim noktasında 100-300 ms bekletilir. Bu yüzden sürekli küçük mesajlar gönderip TV'nin yanıtını
@@ -245,7 +294,7 @@ setInterval(() => {
   tick++;
   if (current && current.mode === 'pad') sendState();
   else if (tick % 2 === 0) ping();
-  if (tick % 10 === 0) updateNet();
+  if (tick % 10 === 0 || (tick % 4 === 0 && $('#netpanel') && !$('#netpanel').classList.contains('hidden'))) updateNet();
 }, 50);
 
 // ---------------------------------------------------------------- mesajlar
@@ -303,10 +352,12 @@ function handle(m) {
     }
     case 'pong':
       if (m.ts) {
-        const r = performance.now() - m.ts;
+        const now = performance.now();
+        const r = now - m.ts;
         if (r >= 0 && r < 5000) {
           const first = !rtt;
-          addRtt(r);
+          addSample(m.ts, typeof m.h === 'number' ? m.h : undefined, now);
+          if (m.f) lag.tvFrame = m.f;
           if (first) updateNet();
         }
       }
